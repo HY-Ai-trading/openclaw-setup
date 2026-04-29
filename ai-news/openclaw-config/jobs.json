@@ -1,0 +1,45 @@
+{
+  "version": 1,
+  "jobs": [
+    {
+      "id": "YOUR_JOB_UUID_1",
+      "agentId": "main",
+      "name": "trading-8h50",
+      "description": "평일 오전 8:50 장 시작 전 분석",
+      "enabled": true,
+      "schedule": {
+        "kind": "cron",
+        "expr": "50 8 * * 1-5",
+        "tz": "Asia/Seoul"
+      },
+      "sessionTarget": "isolated",
+      "wakeMode": "now",
+      "payload": {
+        "kind": "agentTurn",
+        "message": "exec: python3 -u /home/YOUR_USERNAME/openclaw-setup/ai-news/scan.py\n→ still running이면 process poll {session} 대기\n\n[AI 판단 순서]\n1. 출력의 「AI 뉴스검색 대상」 종목마다 web_fetch로 최신 뉴스 확인\n2. 뉴스 + 기술지표 종합해서 SOUL.md 매매전략 기준 판단\n   - 악재 뉴스 있으면 신호 충족해도 BUY 제외\n   - 호재 뉴스 있으면 신호 1개 추가로 인정\n3. SELL 신호 3개↑ 보유종목 → trade.py exec\n4. BUY 신호 충족 종목 → trade.py exec\n5. notify.py로 Discord 전송 (뉴스 판단 근거 포함)\n\n⚠️ 주문 없으면 HOLD 이유(뉴스 포함)를 notify.py로 전송. 응답은 Discord 메시지 내용만.",
+        "timeoutSeconds": 450,
+        "delivery": "user:YOUR_DISCORD_USER_ID"
+      }
+    },
+    {
+      "id": "YOUR_JOB_UUID_2",
+      "agentId": "main",
+      "name": "trading-9h-to-15h20",
+      "description": "평일 장중 9:00~15:20 20분마다 분석",
+      "enabled": true,
+      "schedule": {
+        "kind": "cron",
+        "expr": "*/20 9-15 * * 1-5",
+        "tz": "Asia/Seoul"
+      },
+      "sessionTarget": "isolated",
+      "wakeMode": "now",
+      "payload": {
+        "kind": "agentTurn",
+        "message": "exec: python3 /home/YOUR_USERNAME/openclaw-setup/ai-news/check_time.py\n→ SKIP이면 즉시 종료.\n\nexec: python3 -u /home/YOUR_USERNAME/openclaw-setup/ai-news/scan.py\n→ still running이면 process poll {session} 대기\n\n[AI 판단 순서]\n1. 출력의 「AI 뉴스검색 대상」 종목마다 web_fetch로 최신 뉴스 확인\n2. 뉴스 + 기술지표 종합해서 SOUL.md 매매전략 기준 판단\n   - 악재 뉴스 있으면 신호 충족해도 BUY 제외\n   - 호재 뉴스 있으면 신호 1개 추가로 인정\n3. SELL 신호 3개↑ 보유종목 → trade.py exec\n4. BUY 신호 충족 종목 → trade.py exec\n5. notify.py로 Discord 전송 (뉴스 판단 근거 포함)\n\n⚠️ 주문 없으면 HOLD 이유(뉴스 포함)를 notify.py로 전송. 응답은 Discord 메시지 내용만.",
+        "timeoutSeconds": 450,
+        "delivery": "user:YOUR_DISCORD_USER_ID"
+      }
+    }
+  ]
+}

@@ -1,34 +1,15 @@
 """
-scan.py — 분석 + 판단 + 주문 + Discord 처리
-8:50 AI 브리핑이 저장한 today_context.json을 읽어 하루 종일 매매 판단에 반영
+scan.py (ai-news) — 시장 데이터 수집 + 지표 계산만 출력
+판단은 AI가 뉴스 검색 후 결정
 """
-import sys, os, httpx, subprocess, json
+import sys, os, httpx
 sys.stdout.reconfigure(line_buffering=True)
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from datetime import datetime, timedelta, date
+from datetime import datetime, timedelta
 from dotenv import load_dotenv
 
 load_dotenv(os.path.join(os.path.dirname(__file__), ".env"))
 
-BASE_DIR   = os.path.dirname(os.path.abspath(__file__))
-TRADE_PY   = os.path.join(BASE_DIR, "trade.py")
-NOTIFY_PY  = os.path.join(BASE_DIR, "notify.py")
-CTX_FILE   = os.path.join(BASE_DIR, "today_context.json")
-
-# 8:50 AI 브리핑 컨텍스트 로드 (당일 파일만 유효)
-_ctx = {}
-try:
-    with open(CTX_FILE) as f:
-        _raw = json.load(f)
-    if _raw.get("date") == str(date.today()):
-        _ctx = _raw
-        print(f"📰 오늘 브리핑 로드: {_ctx.get('summary','')}")
-        if _ctx.get("caution"):
-            print(f"   ⚠️  주의종목: {', '.join(_ctx['caution'])}")
-        if _ctx.get("boost"):
-            print(f"   ✅ 호재종목: {', '.join(_ctx['boost'])}")
-except:
-    pass
 SERVER_URL = os.getenv("TRADING_SERVER_URL", "")
 API_KEY    = os.getenv("SIGNAL_SECRET_KEY", "")
 DART_KEY   = os.getenv("DART_API_KEY", "")
@@ -92,30 +73,6 @@ def get_dart(code):
     except:
         return "없음", ""
 
-def send_discord(msg):
-    try:
-        subprocess.run([sys.executable, NOTIFY_PY, msg], timeout=10)
-    except Exception as e:
-        print(f"⚠️ Discord 전송 실패: {e}")
-
-def rsi_label(v):
-    if v <= 30: return "극과매도"
-    if v <= 50: return "과매도"
-    if v <= 70: return "중립"
-    if v <= 80: return "과매수"
-    return "극과매수"
-
-def vol_label(v):
-    if v >= 2.0: return "강한수급유입"
-    if v >= 1.3: return "수급유입"
-    return "평균이하"
-
-def bid_label(v):
-    if v >= 2.0: return "강한매수우위"
-    if v >= 1.3: return "매수우위"
-    if v >= 0.5: return "균형"
-    return "강한매도우위"
-
 
 def main():
     with ThreadPoolExecutor(max_workers=30) as ex:
@@ -140,18 +97,11 @@ def main():
     k_chg      = float(k200.get("change_rate") or 0) if "_err" not in k200 else 0
     overheated = k_chg <= -2.0 or k_rsi >= 80
     buy_min    = 3 if overheated else 2
-    # 8:50 AI 브리핑이 시장 부정적으로 판단했으면 매수 기준 강화
-    if _ctx.get("sentiment") == "negative":
-        buy_min += 1
-
-    ctx_note = ""
-    if _ctx.get("sentiment") == "negative": ctx_note = " 🔴뉴스부정"
-    elif _ctx.get("sentiment") == "positive": ctx_note = " 🟢뉴스긍정"
 
     now_str = datetime.now().strftime("%H:%M")
-    print(f"💰 예수금 {cash:,}원 | KODEX200 RSI{k_rsi:.0f}/{k_chg:+.1f}% {'과열' if overheated else '정상'} | 매수기준 {buy_min}개↑{ctx_note}")
+    print(f"[{now_str}] 예수금 {cash:,}원 | KODEX200 RSI{k_rsi:.0f}/{k_chg:+.1f}% {'과열' if overheated else '정상'} | 매수기준 {buy_min}개↑")
     for code, h in holdings.items():
-        print(f"📦 보유 {h.get('stock_name','?')}({code}) {h.get('quantity',0)}주 {h.get('profit_rate',0):+.1f}%")
+        print(f"보유: {h.get('stock_name','?')}({code}) {h.get('quantity',0)}주 수익률{h.get('profit_rate',0):+.1f}%")
 
     # 랭킹 후보
     rank_map = {}
@@ -179,8 +129,8 @@ def main():
             for fut in as_completed(futs):
                 code, q, i = fut.result(); wl_res[code] = (q, i)
 
-    print(f"\n{'코드':<8}{'종목명':<8}{'가격':>8}  {'RSI':>5} {'변화율':>7} {'거래량':>6} {'BB':>6} {'호가비':>5}  B/S")
-    print("─" * 72)
+    print(f"\n{'코드':<8}{'종목명':<8}{'가격':>8}  {'RSI':>5} {'변화율':>7} {'거래량':>6} {'BB':>6} {'호가비':>5} {'수익률':>6}  B/S")
+    print("─" * 76)
 
     analysis = {}
     for code in all_codes:
@@ -209,12 +159,13 @@ def main():
 
         bb_pos = "하단" if bb_l and close <= bb_l else ("상단" if bb_u and close >= bb_u else "중간")
         ma_sig = "골" if (ma5 and ma20 and ma5 < ma20 and close > ma5) else "-"
+        pr_str = f"{pr:+.1f}%" if pr is not None else "-"
 
         buy_conds = []
         if rsi  and rsi  <= 50:  buy_conds.append(f"RSI{rsi:.0f}")
         if vol  and vol  >= 1.3: buy_conds.append(f"거래량{vol:.1f}x")
         if chg  and chg  <= -1.0:buy_conds.append(f"하락{chg:.1f}%")
-        if bb_l and close <= bb_l:buy_conds.append("BB하단")
+        if bb_l and close <= bb_l: buy_conds.append("BB하단")
         if ma5 and ma20 and ma5 < ma20 and close > ma5: buy_conds.append("MA골")
         if bid_r and bid_r >= 1.3: buy_conds.append(f"호가{bid_r:.1f}")
         if brt  and brt  >= 150: buy_conds.append(f"buy_rt{brt:.0f}")
@@ -228,102 +179,52 @@ def main():
         if bb_u and close >= bb_u: sell_conds.append("BB상단")
         if bid_r and bid_r < 0.5: sell_conds.append(f"호가{bid_r:.2f}")
 
-        b, s = len(buy_conds), len(sell_conds) if code in holdings else 0
-        print(f"{code:<8}{name:<8}{price:>8,}  {rsi:>5.1f} {chg:>+7.1f}% {vol:>6.1f}x {bb_pos:>6} {bid_r:>5.2f}  {b}/{s}")
+        b = len(buy_conds)
+        s = len(sell_conds) if code in holdings else 0
+        print(f"{code:<8}{name:<8}{price:>8,}  {rsi:>5.1f} {chg:>+7.1f}% {vol:>6.1f}x {bb_pos:>6} {bid_r:>5.2f} {pr_str:>6}  {b}/{s}")
         analysis[code] = dict(name=name, price=price, pr=pr, rsi=rsi, chg=chg,
                                vol=vol, bid_r=bid_r, bb_pos=bb_pos, ma_sig=ma_sig,
                                brt=brt, buy_conds=buy_conds, sell_conds=sell_conds)
 
-    print("\n" + "═"*50)
-    actions = []
-
-    # ── SELL 판단 ─────────────────────────────────────────────
+    # 신호 상세
+    print("\n[매도신호] (보유종목, 기준 3개↑)")
     for code, d in analysis.items():
-        if code not in holdings: continue
-        pr   = d["pr"] or 0
-        name = d["name"]
-        sc   = d["sell_conds"]
-        # 뉴스 주의종목은 신호 2개만 있어도 매도
-        sell_threshold = 2 if code in _ctx.get("caution", []) else 3
-        if len(sc) >= sell_threshold:
-            conf  = 0.85 if len(sc) >= 4 else 0.70
-            label = "수익실현" if pr >= 0 else "손실축소"
-            reason = (f"수익률{pr:+.1f}% | RSI{d['rsi']:.0f}({rsi_label(d['rsi'])}) | "
-                      f"당일{d['chg']:+.1f}% | BB{d['bb_pos']} | "
-                      f"호가비{d['bid_r']:.2f}({bid_label(d['bid_r'])}) | "
-                      f"매도신호 {len(sc)}개: {', '.join(sc)}")
-            print(f"🟡 SELL신호({label}) {name}({code}) {pr:+.1f}% [{', '.join(sc)}] 신뢰도{conf}")
-            pending = json.dumps({"code":code,"name":name,"action":"SELL",
-                                  "confidence":conf,"ratio":1.0,"reason":reason}, ensure_ascii=False)
-            print(f"PENDING_SELL: {pending}")
-            actions.append(("SELL", code, name, pr, d))
-        elif pr < -7:
-            print(f"⚠️  손실보유 {name}({code}) {pr:+.1f}% 신호없음 → 반등 대기")
+        if code not in holdings or not d["sell_conds"]: continue
+        pr_str = f"{d['pr']:+.1f}%" if d["pr"] is not None else ""
+        print(f"  {d['name']}({code}) {pr_str} → {', '.join(d['sell_conds'])} ({len(d['sell_conds'])}개)")
 
-    # ── BUY 판단 ─────────────────────────────────────────────
-    sold_codes    = {code for act, code, *_ in actions if act == "SELL"}
-    buy_candidates = [(c, d) for c, d in analysis.items()
-                      if len(d["buy_conds"]) >= buy_min and c not in sold_codes]
+    print(f"\n[매수신호] (기준 {buy_min}개↑)")
+    news_targets = []
+    for code, d in analysis.items():
+        if not d["buy_conds"]: continue
+        mark = "★" if len(d["buy_conds"]) >= buy_min else " "
+        print(f" {mark} {d['name']}({code}) → {', '.join(d['buy_conds'])} ({len(d['buy_conds'])}개)")
+        if len(d["buy_conds"]) >= max(1, buy_min - 1):
+            news_targets.append((code, d["name"]))
 
-    if buy_candidates:
+    # DART
+    dart_codes = list({c for c, d in analysis.items()
+                       if len(d["buy_conds"]) >= 1 or c in holdings})
+    if dart_codes:
+        print("\n[DART 공시]")
         dart_results = {}
-        with ThreadPoolExecutor(max_workers=len(buy_candidates)) as ex:
-            futs = {ex.submit(get_dart, c): c for c, _ in buy_candidates}
+        with ThreadPoolExecutor(max_workers=max(1, len(dart_codes))) as ex:
+            futs = {ex.submit(get_dart, c): c for c in dart_codes}
             for fut in as_completed(futs):
-                dart_results[futs[fut]] = fut.result()
+                c = futs[fut]; dart_results[c] = fut.result()
+        for c in dart_codes:
+            sig, summary = dart_results.get(c, ("없음", ""))
+            label = {"악재": "⚠️악재", "호재": "✅호재", "없음": "없음"}[sig]
+            print(f"  {analysis[c]['name']}({c}): {label}"
+                  + (f" — {summary[:40]}" if summary else ""))
 
-        caution_codes = _ctx.get("caution", [])
-        boost_codes   = _ctx.get("boost", [])
+    # AI 뉴스 검색 대상 명시
+    if news_targets:
+        print("\n[AI 뉴스검색 대상] ← 아래 종목 최신 뉴스 확인 후 매매 판단")
+        for code, name in news_targets:
+            print(f"  {name}({code}): https://search.naver.com/search.naver?query={name}+주식+뉴스")
 
-        valid_buys = []
-        for code, d in buy_candidates:
-            sig, summary = dart_results.get(code, ("없음", ""))
-            n = len(d["buy_conds"])
-            if sig == "악재":
-                print(f"⚫ BUY 제외 {d['name']}({code}) 악재공시: {summary[:40]}")
-                continue
-            if code in caution_codes:
-                print(f"⚫ BUY 제외 {d['name']}({code}) 오늘 뉴스 주의종목")
-                continue
-            if sig == "호재": n += 1
-            if code in boost_codes: n += 1
-            valid_buys.append((code, d, n, summary))
-
-        if valid_buys:
-            ratio    = 0.5 if len(valid_buys) == 1 else (0.35 if len(valid_buys) == 2 else 0.25)
-            conf_map = {2: 0.70, 3: 0.75, 4: 0.85}
-            for code, d, n, dart_summary in valid_buys:
-                name   = d["name"]
-                conf   = conf_map.get(n, 0.95)
-                conds  = "/".join(d["buy_conds"])
-                reason = (f"RSI{d['rsi']:.0f}({rsi_label(d['rsi'])}) | "
-                          f"당일{d['chg']:+.1f}% | 거래량{d['vol']:.1f}x({vol_label(d['vol'])}) | "
-                          f"BB{d['bb_pos']} | 호가비{d['bid_r']:.2f}({bid_label(d['bid_r'])}) | "
-                          f"MA{'골든크로스' if d['ma_sig']=='골' else '없음'} | "
-                          f"매수신호 {n}개(기준{buy_min}개) | "
-                          f"KODEX200 RSI{k_rsi:.0f} {'과열' if overheated else '정상'}"
-                          + (f" | 공시: {dart_summary[:30]}" if dart_summary else ""))
-                print(f"🟢 BUY신호 {name}({code}) 조건{n}개 [{conds}] 신뢰도{conf} ratio{ratio}")
-                pending = json.dumps({"code":code,"name":name,"action":"BUY",
-                                      "confidence":conf,"ratio":ratio,"reason":reason}, ensure_ascii=False)
-                print(f"PENDING_BUY: {pending}")
-                actions.append(("BUY", code, name, None, d))
-
-    # ── Discord ───────────────────────────────────────────────
-    if not actions:
-        print("→ 전종목 HOLD")
-        hold = " ".join(f"{h.get('stock_name','?')[:4]}({c}) {h.get('profit_rate',0):+.1f}%"
-                        for c, h in holdings.items()) or "없음"
-        best = max(analysis.items(), key=lambda x: len(x[1]["buy_conds"]), default=None)
-        hint = ""
-        if best:
-            bc, bd = best
-            hint = f" | 최고신호 {bd['name']}({bc}) {len(bd['buy_conds'])}/{buy_min}개"
-        msg = f"[{now_str}] HOLD | 보유:{hold}{hint}"
-        print(f"\nDISCORD_MSG: {msg}")
-    else:
-        # PENDING 신호 있음 → AI가 뉴스 확인 후 직접 trade.py 실행 및 Discord 전송
-        print("\n→ AI 뉴스 판단 후 주문 실행 필요")
+    print("\n=== SCAN_COMPLETE ===")
 
 
 if __name__ == "__main__":

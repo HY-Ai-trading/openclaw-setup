@@ -35,7 +35,7 @@
 ## 서킷브레이커 (자동 정지)
 
 - **조건:** 연속 실패 4회
-- **현재 위험 요소:** API 서버(`api.mieung.kr`) 다운 시 → query.py 실패 → 에러 누적
+- **현재 위험 요소:** API 서버(`your-api-server.example.com`) 다운 시 → query.py 실패 → 에러 누적
 - **15:40 SKIP은 에러 아님** (`sys.exit(0)` 처리됨 → consecutiveErrors 안 쌓임)
 
 ## 서킷브레이커 걸렸을 때 복구 방법

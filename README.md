@@ -1,170 +1,197 @@
 # openclaw-setup
 
-OpenClaw 기반 키움증권 자동매매 봇 설정 파일 모음.
-
-평일 장중 20분마다 RSI · 볼린저밴드 · 호가비 · 거래량 등 기술 지표를 분석해 자동 매수/매도 주문을 실행하고, 결과를 Discord DM으로 전송합니다.
+OpenClaw + 키움증권 자동매매 봇. 평일 장중 20분마다 RSI·볼린저밴드·호가비·거래량 등 기술 지표를 분석해 자동 매수/매도 주문을 실행하고, 결과를 Discord DM으로 전송합니다.
 
 ---
 
-## 구조
+## 사용 방식 선택
+
+| 폴더 | 방식 | AI 필요 | 뉴스 반영 | 비용 |
+|------|------|---------|----------|------|
+| `python-only/` | 순수 Python + Linux cron | ❌ | ❌ | 없음 |
+| (루트) | Python 신호 + AI 뉴스 판단 | ✅ OpenClaw | ✅ 신호 발생 시 | ~3,200원/월 |
+| `ai-news/` | 순수 AI (레퍼런스) | ✅ OpenClaw | ✅ 매회 | 더 높음 |
+
+**AI 없이 쓰고 싶으면 → `python-only/` 폴더**
+**OpenClaw + 뉴스 판단까지 원하면 → 루트 폴더**
+
+---
+
+## 폴더 구조
 
 ```
 openclaw-setup/
-├── scan.py              # 핵심: 전 종목 분석 → 매수/매도 exec 명령 출력 + Discord 전송
-├── trade.py             # 키움 API로 실제 주문 실행 (BUY/SELL, 지정가)
+├── scan.py              # 전 종목 분석 → PENDING 신호 출력 (AI가 최종 판단)
+├── trade.py             # 지정가 주문 실행 (BUY/SELL)
 ├── query.py             # API 인증 래퍼 (GET/POST)
-├── check_time.py        # 장중 여부 확인 (SKIP 또는 OK 출력)
+├── check_time.py        # 장중 여부 확인
+├── notify.py            # Discord DM 전송
 ├── dart.py              # DART 공시 조회 (악재 필터)
-├── notify.py            # Discord DM 전송 유틸
-├── STRATEGY.md          # 매매 전략 기준 문서
-├── .env.example         # 환경변수 샘플 (실제 .env는 gitignore)
-└── openclaw-config/
-    ├── SOUL.md          # OpenClaw 에이전트 시스템 프롬프트
-    └── jobs.json        # cron 잡 설정 (jobs.json 위치: ~/.openclaw/cron/jobs.json)
+├── today_context.json   # 8:50 AI 브리핑 저장 파일 (당일만 유효, gitignore)
+├── .env.example         # 환경변수 샘플
+├── HOW_IT_WORKS.md      # 상세 동작 구조
+├── STRATEGY.md          # 매매 전략 기준
+│
+├── python-only/         # AI 없이 Linux cron으로 단독 실행
+│   ├── scan.py          # 분석 + 판단 + 주문 + Discord 전부 Python 처리
+│   ├── cron-setup.sh    # Linux cron 등록 스크립트
+│   └── HOW_IT_WORKS.md
+│
+└── ai-news/             # 레퍼런스: 순수 AI 방식
+    ├── scan.py          # 데이터 출력만 (판단은 AI)
+    ├── openclaw-config/
+    │   ├── jobs.json    # OpenClaw cron 잡 템플릿
+    │   └── SOUL.md      # AI 에이전트 지침
+    └── HOW_IT_WORKS.md
 ```
 
 ---
 
-## 사전 준비
-
-| 항목 | 설명 |
-|------|------|
-| **OpenClaw** | 에이전트 플랫폼. `~/.openclaw/` 아래 설정 파일 위치 |
-| **키움증권 API 서버** | `api.mieung.kr` 호환 서버 (별도 구축 필요) |
-| **Discord Bot** | [Discord Developer Portal](https://discord.com/developers/applications)에서 봇 생성 후 DM 채널 권한 부여 |
-| **DART API 키** | [OpenDART](https://opendart.fss.or.kr) 에서 발급 |
-
----
-
-## 설치
-
-### 1. 레포 클론 및 패키지 설치
+## 공통 사전 준비
 
 ```bash
-git clone https://github.com/YOUR_USERNAME/openclaw-setup.git ~/openclaw-setup
-cd ~/openclaw-setup
 pip install httpx python-dotenv
-```
-
-### 2. 환경변수 설정
-
-```bash
 cp .env.example .env
-nano .env   # 각 항목을 실제 값으로 채우기
+nano .env
 ```
-
-`.env` 항목 설명:
 
 | 키 | 설명 |
 |----|------|
-| `TRADING_SERVER_URL` | 키움 API 서버 주소 (e.g. `https://api.example.com`) |
-| `SIGNAL_SECRET_KEY` | API 서버 인증 키 (서버와 동일한 값) |
+| `TRADING_SERVER_URL` | 키움 API 브릿지 서버 주소 |
+| `SIGNAL_SECRET_KEY` | API 서버 인증 키 |
 | `DISCORD_BOT_TOKEN` | Discord Bot 토큰 |
-| `DISCORD_USER_ID` | Discord DM 수신자 사용자 ID (개발자 모드 → 프로필 우클릭 → ID 복사) |
-| `DASHBOARD_PASSWORD` | 대시보드 로그인 비밀번호 |
-| `SESSION_SECRET` | 세션 암호화용 랜덤 문자열 |
-| `DART_API_KEY` | DART 공시 API 키 |
+| `DISCORD_USER_ID` | DM 수신자 Discord 사용자 ID |
+| `DART_API_KEY` | [OpenDART](https://opendart.fss.or.kr) 에서 발급 |
 
-### 3. OpenClaw SOUL 설정
+> `TRADING_SERVER_URL`은 키움증권 API와 연결된 브릿지 서버 주소입니다. 직접 구축하거나 동일 스펙의 서버가 필요합니다.
+
+---
+
+## 방식 A — AI 없이 사용 (python-only)
+
+Linux cron이 직접 scan.py를 실행. OpenClaw 불필요. 비용 없음.
+
+```bash
+cd python-only
+cp ../.env.example .env && nano .env
+bash cron-setup.sh
+```
+
+등록되는 스케줄:
+```
+50 8     * * 1-5   python3 ~/openclaw-setup/python-only/scan.py
+*/20 9-15 * * 1-5  python3 ~/openclaw-setup/python-only/scan.py
+```
+
+**동작:**
+```
+cron → scan.py
+    → 기술 지표 계산 (RSI / BB / MA / 거래량비 / 호가비)
+    → DART 공시 악재 확인
+    → SELL 신호 3개↑ → trade.py 자동 실행
+    → BUY 신호 2개↑ → trade.py 자동 실행
+    → Discord DM 전송
+```
+
+뉴스 없음. 기술 지표 + DART 공시만으로 판단. 가장 안정적.
+
+---
+
+## 방식 B — OpenClaw + AI 뉴스 판단 (루트 폴더, 현재 권장)
+
+Python이 신호를 계산하고, AI(gpt-4.1-mini)가 뉴스 확인 후 최종 매매를 결정.
+
+### 사전 요구사항
+
+- [OpenClaw](https://openclaw.ai) 설치 및 gpt-4.1-mini 설정
+
+### 설치
+
+```bash
+cp .env.example .env && nano .env
+```
+
+### SOUL.md 설정
 
 ```bash
 cp openclaw-config/SOUL.md ~/.openclaw/workspace/SOUL.md
 ```
 
-`SOUL.md` 안의 `/home/YOUR_USERNAME/` 경로를 실제 경로로 치환:
-```bash
-sed -i 's|YOUR_USERNAME|'$USER'|g' ~/.openclaw/workspace/SOUL.md
-```
-
-### 4. cron 잡 등록
+### cron 잡 등록
 
 ```bash
 cp openclaw-config/jobs.json ~/.openclaw/cron/jobs.json
 ```
 
-`jobs.json` 안의 플레이스홀더를 실제 값으로 치환:
-- `YOUR_USERNAME` → 실제 리눅스 사용자명
-- `YOUR_DISCORD_USER_ID` → Discord 사용자 ID
-- `YOUR_JOB_UUID_1`, `YOUR_JOB_UUID_2` → `python3 -c "import uuid; print(uuid.uuid4())"` 로 생성한 UUID
+`jobs.json` 플레이스홀더 교체:
 
----
+| 플레이스홀더 | 값 |
+|------------|-----|
+| `YOUR_USERNAME` | `echo $USER` 결과 |
+| `YOUR_DISCORD_USER_ID` | Discord 사용자 ID (개발자 모드 → 우클릭 → ID 복사) |
+| `YOUR_JOB_UUID_1/2` | `python3 -c "import uuid; print(uuid.uuid4())"` 로 생성 |
 
-## 동작 방식
+### 동작
 
-### cron 스케줄
-
-| 잡 | 시간 | 내용 |
-|----|------|------|
-| `trading-8h50` | 평일 08:50 KST | 장 시작 전 보유 종목 점검 |
-| `trading-9h-to-15h20` | 평일 09:00~15:20, 20분마다 | 장중 전 종목 스캔 |
-
-### 실행 흐름
-
+**08:50 (AI 브리핑):**
 ```
-check_time.py → 장외시간이면 SKIP (종료)
-        ↓
-scan.py → API에서 시세/호가/보유현황 조회
-        ↓
-기술 지표 계산 (RSI, BB, 호가비, 거래량배율)
-        ↓
-SELL 신호 3개 이상 → trade.py --action SELL exec
-BUY  신호 N개 이상 → trade.py --action BUY  exec
-        ↓
-DISCORD_MSG 출력 + Discord DM 직접 전송
+이데일리 RSS 수집
+→ scan.py 실행 (기술 지표)
+→ 종목별 뉴스 확인 (구글 뉴스 RSS, 최대 3개)
+→ today_context.json 저장 (sentiment / caution / boost)
+→ Discord 브리핑 전송
 ```
 
-### 매매 전략 요약
+**09:00~15:20 (20분마다):**
+```
+scan.py 실행
+→ PENDING 신호 있으면:
+    구글 뉴스 RSS 확인 (신호 종목만)
+    심각한 악재 → SKIP / 그 외 → trade.py 실행
+    Discord 전송 (뉴스 판단 근거 포함)
+→ PENDING 없으면:
+    HOLD 메시지만 Discord 전송
+```
 
-자세한 내용은 [STRATEGY.md](STRATEGY.md) 참조.
-
-**매도** — 아래 중 3개 이상 동시 충족 시 (손익과 무관한 순수 시장 신호):
-- 수익 +5% 이상
-- RSI ≥ 78
-- 당일 급등 ≥ +4%
-- 볼린저 상단 돌파
-- 호가비(매수/매도) < 0.5
-
-**매수** — KODEX200 과열 여부에 따라 2~3개 이상 충족 시:
-- RSI ≤ 50, 거래량 ≥ 평균 1.3배, 당일 하락 ≤ -1%, BB 하단, MA 골든크로스, 호가비 ≥ 1.3, 매수강도 ≥ 150
+**비용 (gpt-4.1-mini):** ~145원/일 · ~3,200원/월
 
 ---
 
 ## 주요 스크립트
 
-### `scan.py`
-전 종목 분석의 진입점. 실행하면 표준 출력으로 분석 결과 + trade.py exec 명령이 나옵니다.
-
-```bash
-python3 scan.py
-```
-
-### `trade.py`
-실제 주문 실행. scan.py 출력의 exec 명령을 그대로 실행하면 됩니다.
+### `trade.py` — 수동 주문
 
 ```bash
 python3 trade.py --code 005930 --name '삼성전자' --action BUY \
-  --confidence 0.70 --ratio 0.50 --reason 'RSI45,거래량급증'
+  --confidence 0.75 --ratio 0.50 --reason 'RSI45, 거래량급증'
 ```
 
 | 옵션 | 설명 |
 |------|------|
 | `--code` | 종목코드 (6자리) |
-| `--name` | 종목명 |
 | `--action` | `BUY` 또는 `SELL` |
-| `--confidence` | 신뢰도 (0.0~1.0) |
-| `--ratio` | 예수금 투입 비율 (0.0~1.0) |
-| `--reason` | 매매 사유 (로그용) |
+| `--confidence` | 신뢰도 0.0~1.0 (0.7 미만이면 실행 안 됨) |
+| `--ratio` | 예수금 투입 비율 (기본 0.45) |
 
-### `query.py`
-API 서버 조회 래퍼. 인증 헤더를 자동으로 붙여줍니다.
+### `query.py` — 계좌/시세 조회
 
 ```bash
 python3 query.py /kiwoom/account          # 잔고 조회
-python3 query.py /kiwoom/holdings         # 보유 종목
-python3 query.py /kiwoom/quote/005930     # 특정 종목 호가
+python3 query.py /kiwoom/quote/005930     # 호가 조회
 python3 query.py /kiwoom/orders/filled    # 체결 내역
-python3 query.py /dashboard/summary       # 대시보드 요약
 ```
+
+---
+
+## 매매 전략 요약
+
+**매도** (보유종목, 신호 3개↑):
+수익률 ≥ +5% / RSI ≥ 78 / 당일 ≥ +4% / BB 상단 / 호가비 < 0.5
+
+**매수** (신호 2개↑, 시장 과열·뉴스 부정 시 3개↑):
+RSI ≤ 50 / 거래량 ≥ 1.3x / 당일 ≤ -1% / BB 하단 / MA 골든 / 호가비 ≥ 1.3 / 매수강도 ≥ 150
+
+자세한 내용: [HOW_IT_WORKS.md](HOW_IT_WORKS.md) · [STRATEGY.md](STRATEGY.md)
 
 ---
 
@@ -172,6 +199,7 @@ python3 query.py /dashboard/summary       # 대시보드 요약
 
 ```
 .env
+today_context.json
 __pycache__/
 *.pyc
 ```
@@ -180,6 +208,6 @@ __pycache__/
 
 ## 주의사항
 
-- 이 봇은 **실제 자금으로 주식을 자동 매매**합니다. 충분한 테스트 후 운영하세요.
-- API 서버, Discord 봇, DART 키 등 모든 인증 정보는 절대 커밋하지 마세요.
+- 이 봇은 **실제 자금으로 주식을 자동 매매**합니다. 충분히 테스트한 후 운영하세요.
+- `.env` 파일 및 서버 주소는 절대 커밋하지 마세요.
 - 투자 결과에 대한 책임은 사용자 본인에게 있습니다.
