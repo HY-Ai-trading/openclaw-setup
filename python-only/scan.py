@@ -1,11 +1,11 @@
 """
 scan.py (python-only) — 분석 + 판단 + 주문 + Discord 전부 Python 처리
-AI 불필요. Linux cron 5분마다 실행.
+AI 불필요. Linux cron 2분마다 실행.
 
 전략 요약:
-  매수: 강한 과매도 반등 신호 3개↑ (RSI≤35, 거래량2x, 조정-2%, BB하단 등)
-  매도: 수익+7% / RSI≥75 / 급등+5% / BB상단 + 신호 2개↑
-  스탑로스: 수익률 -5% 이하 → 즉시 매도
+  매수: 신호 3개↑ (RSI≤45, 거래량1.3x, 하락-1%, BB하단, MA골, 호가비1.2, buy_rt130)
+        매도신호 없는 종목만 / DART 악재 제외
+  매도: 수익+7%(단독) / RSI≥80+BB상단 등 2개↑ / 비상손절 -30%
 """
 import sys, os, httpx, subprocess, time, threading
 sys.stdout.reconfigure(line_buffering=True)
@@ -48,7 +48,7 @@ NAME_MAP = {
     "105560":"KB금융",    "055550":"신한지주",   "086790":"하나금융",  "012450":"한화에어로",
     "079550":"LIG넥스원", "035420":"NAVER",      "035720":"카카오",    "259960":"크래프톤",
     "015760":"한국전력",  "034020":"두산에너빌", "078930":"GS",        "061250":"유진로봇",
-    "217820":"이루다",    "001510":"BYC",        "056080":"유진에너지", "084850":"유진기업",
+    "217820":"이루다",    "001510":"SK증권",     "056080":"유진에너지", "084850":"아이티엠반도체",
 }
 
 WATCHLIST = [
@@ -90,9 +90,9 @@ WATCHLIST = [
     # 기타
     "061250",  # 유진로봇
     "217820",  # 이루다
-    "001510",  # BYC
+    "001510",  # SK증권
     "056080",  # 유진에너지솔루션
-    "084850",  # 유진기업
+    "084850",  # 아이티엠반도체
     # "XXXXXX",  # 컨텍 ← 종목코드 확인 후 추가
 ]
 
@@ -183,6 +183,18 @@ def send_discord(msg):
         if attempt < 2:
             time.sleep(3)
 
+def run_trade(cmd, label):
+    for attempt in range(3):
+        r = subprocess.run(cmd, capture_output=True, text=True)
+        print(r.stdout.strip())
+        if r.returncode == 0:
+            return r
+        err = r.stderr.strip() or r.stdout.strip()
+        print(f"⚠️ {label} 재시도 {attempt+1}/3: {err[:150]}")
+        if attempt < 2:
+            time.sleep(3)
+    return r
+
 def send_error(context: str, err: str):
     now = datetime.now().strftime("%H:%M:%S")
     msg = f"🚨 [{now}] 에러 — {context}\n{err[:300]}"
@@ -191,59 +203,43 @@ def send_error(context: str, err: str):
 
 def build_discord_msg(now_str, cash, k_rsi, k_chg, overheated, buy_min,
                       holdings, analysis, actions):
-    lines = []
-    market = "⚠️과열" if overheated else "✅정상"
-    lines.append(f"{'🟢 BUY' if any(a[0]=='BUY' for a in actions) else '🟡 SELL'} 체결 [{now_str}]")
-    lines.append(f"KODEX RSI{k_rsi:.0f}/{k_chg:+.1f}% {market} | 예수금 {cash:,}원 | 기준{buy_min}개↑")
+    has_buy  = any(a[0] == "BUY"  for a in actions)
+    has_sell = any(a[0] == "SELL" for a in actions)
+    label    = ("🟢BUY" if has_buy else "") + ("🟡SELL" if has_sell else "")
+    market   = f"KODEX RSI{k_rsi:.0f}/{k_chg:+.1f}%{'⚠️' if overheated else ''}"
+    lines    = [f"[{now_str}] {label} | {market} | 예수금 {cash:,}원", ""]
 
-    if holdings:
-        hold_parts = [f"{h.get('stock_name','?')[:5]}({c}) {h.get('profit_rate',0):+.1f}%"
-                      for c, h in holdings.items()]
-        lines.append(f"📦 보유: {' | '.join(hold_parts)}")
-
-    # ── 매매 상세 ──
+    # ── 매매 내역 (한 줄씩) ──
+    acted_codes = set()
     for act, code, name, pr, d in actions:
-        lines.append("─" * 28)
+        acted_codes.add(code)
+        conds = "·".join(d["buy_conds"] if act == "BUY" else d["sell_conds"])
         if act == "BUY":
             n = len(d["buy_conds"])
-            conf_map = {3: 0.75, 4: 0.85, 5: 0.90}
-            conf = conf_map.get(n, 0.95)
-            lines.append(f"🟢 BUY  {name}({code})")
-            lines.append(f"   신뢰도 {conf} | 신호 {n}/{buy_min}개")
-            lines.append(f"   RSI {d['rsi']:.0f} ({rsi_label(d['rsi'])})")
-            lines.append(f"   당일 {d['chg']:+.1f}% | 거래량 {d['vol']:.1f}x ({vol_label(d['vol'])})")
-            lines.append(f"   BB {d['bb_pos']} | 호가비 {d['bid_r']:.2f} ({bid_label(d['bid_r'])})")
-            lines.append(f"   충족: {' / '.join(d['buy_conds'])}")
+            lines.append(f"🟢 {name}({code})  {n}/{buy_min}  RSI{d['rsi']:.0f} {d['chg']:+.1f}% {d['vol']:.1f}x  [{conds}]")
         else:
-            emergency = pr <= -30.0
-            label = "비상손절🔴" if emergency else ("수익실현💰" if pr >= 0 else "손실축소")
-            lines.append(f"🟡 SELL {name}({code})  {label}")
-            lines.append(f"   수익률 {pr:+.1f}% | 신뢰도 {'0.90' if emergency else ('0.85' if len(d['sell_conds'])>=4 else '0.70')}")
-            lines.append(f"   RSI {d['rsi']:.0f} ({rsi_label(d['rsi'])})")
-            lines.append(f"   당일 {d['chg']:+.1f}% | BB {d['bb_pos']} | 호가비 {d['bid_r']:.2f}")
-            lines.append(f"   충족: {' / '.join(d['sell_conds'])}")
+            tag = "🔴손절" if pr <= -30.0 else ("💰수익" if pr >= 0 else "손실")
+            lines.append(f"🟡 {name}({code})  {tag}{pr:+.1f}%  RSI{d['rsi']:.0f} BB{d['bb_pos']}  [{conds}]")
 
-    # ── 전체 종목 신호 표 ──
-    lines.append("─" * 28)
-    lines.append("📊 전체 종목 신호 현황")
-    sorted_stocks = sorted(analysis.items(), key=lambda x: len(x[1]["buy_conds"]), reverse=True)
+    # ── 보유 현황 ──
+    if holdings:
+        parts = [f"{h.get('stock_name','?')[:4]} {h.get('profit_rate',0):+.1f}%"
+                 for c, h in holdings.items()]
+        lines.append(f"📦 {' | '.join(parts)}")
 
-    signal_stocks = [(c, d) for c, d in sorted_stocks if len(d["buy_conds"]) >= 1]
-    zero_stocks   = [(c, d) for c, d in sorted_stocks if len(d["buy_conds"]) == 0]
-
-    for code, d in signal_stocks:
-        n = len(d["buy_conds"])
-        icon = "🟢" if n >= buy_min else ("🔶" if n == buy_min - 1 else "🔹")
-        lines.append(f"{icon} {d['name'][:6]}({code})  "
-                     f"RSI{d['rsi']:.0f} {d['chg']:+.1f}% {d['vol']:.1f}x  "
-                     f"[{n}/{buy_min}] {' '.join(d['buy_conds'])}")
-
-    if zero_stocks:
-        compact = " ".join(f"{d['name'][:4]}" for _, d in zero_stocks)
-        lines.append(f"⬜ 신호없음: {compact}")
+    # ── 근접 신호 종목 (매매 제외, 신호 1개↑) ──
+    near = [(c, d) for c, d in sorted(analysis.items(),
+             key=lambda x: len(x[1]["buy_conds"]), reverse=True)
+            if len(d["buy_conds"]) >= 1 and c not in acted_codes][:6]
+    if near:
+        lines.append("")
+        for code, d in near:
+            n    = len(d["buy_conds"])
+            icon = "🔶" if n == buy_min - 1 else "🔹"
+            conds = "·".join(d["buy_conds"])
+            lines.append(f"{icon} {d['name'][:5]}  {n}/{buy_min}  RSI{d['rsi']:.0f} {d['chg']:+.1f}%  [{conds}]")
 
     msg = "\n".join(lines)
-    # Discord 2000자 제한
     return msg[:1990] if len(msg) > 1990 else msg
 
 def rsi_label(v):
@@ -265,6 +261,15 @@ def bid_label(v):
     if v >= 1.5: return "매수우위"
     if v >= 0.5: return "균형"
     return "매도우위"
+
+
+def stock_name(code, quote=None, ind=None, holding=None):
+    quote = quote or {}
+    ind = ind or {}
+    holding = holding or {}
+    return (quote.get("hts_kor_isnm") or quote.get("stk_nm") or quote.get("kor_isnm")
+            or quote.get("name") or ind.get("name") or holding.get("stock_name")
+            or NAME_MAP.get(code) or code)[:7]
 
 
 def main():
@@ -294,18 +299,8 @@ def main():
     k_rsi      = float(k200.get("rsi_14") or 50)    if "_err" not in k200 else 50
     k_chg      = float(k200.get("change_rate") or 0) if "_err" not in k200 else 0
     overheated = k_chg <= -2.0 or k_rsi >= 80
-    # ── 고인물 시간대 판단 (매수 자제, 금지 아님) ───────────────
-    # 9:00~9:30  장 초반: 변동성 극심          → +1
-    # 11:20~13:00 점심: 유동성 감소            → +1
-    # 14:30~15:20 장 마감: 기관 정리매물       → +1
     now     = datetime.now()
-    hour, minute = now.hour, now.minute
-    caution_period  = ((hour == 9 and minute < 30) or
-                       (hour == 11 and minute >= 20) or
-                       (12 <= hour < 13) or
-                       (hour == 14 and minute >= 30))
-    buy_min_base    = 3 if overheated else 2
-    buy_min         = buy_min_base + (1 if caution_period else 0)
+    buy_min = 3
 
     now_str = now.strftime("%H:%M")
     print(f"💰 예수금 {cash:,}원 | KODEX200 RSI{k_rsi:.0f}/{k_chg:+.1f}% {'과열⚠️' if overheated else '정상'} | 매수기준 {buy_min}개↑")
@@ -370,10 +365,7 @@ def main():
         q   = quotes.get(code, {})
         ind = inds.get(code, {})
         if "_err" in q: continue
-        name  = (NAME_MAP.get(code)
-                 or q.get("hts_kor_isnm") or q.get("stk_nm") or q.get("kor_isnm")
-                 or q.get("name") or ind.get("name")
-                 or holdings.get(code, {}).get("stock_name") or code)[:7]
+        name  = stock_name(code, q, ind, holdings.get(code))
         price = abs(int(q.get("sel_fpr_bid") or 0))
         t_buy = int(q.get("tot_buy_req") or 0)
         t_sel = int(q.get("tot_sel_req") or 1)
@@ -415,6 +407,7 @@ def main():
         if chg  and chg  >= 7.0:  sell_conds.append(f"급등+{chg:.1f}%")
         if bb_u and close >= bb_u: sell_conds.append("BB상단")
         if bb_u and close >= bb_u and chg < 0: sell_conds.append("BB상단반전")
+        if bid_r and bid_r < 0.5: sell_conds.append(f"매도우위{bid_r:.1f}")
 
         b, s = len(buy_conds), len(sell_conds) if code in holdings else 0
         print(f"{code:<8}{name:<8}{price:>8,}  {rsi:>5.1f} {chg:>+7.1f}% {vol:>6.1f}x {bb_pos:>6} {bid_r:>5.2f}  {b}/{s}")
@@ -447,11 +440,13 @@ def main():
             print(f"🟡 SELL({label}) {name}({code}) {pr:+.1f}% [{', '.join(sc)}] 신뢰도{conf}")
             cmd = [sys.executable, TRADE_PY, "--code", code, "--name", name,
                    "--action", "SELL", "--confidence", str(conf), "--ratio", "1.0", "--reason", reason]
-            r = subprocess.run(cmd, capture_output=True, text=True)
-            print(r.stdout.strip())
+            r = run_trade(cmd, f"SELL {name}({code})")
             if r.returncode != 0:
                 send_error(f"SELL {name}({code}) 주문 실패", r.stderr.strip() or r.stdout.strip())
-            actions.append(("SELL", code, name, pr, d))
+            elif "✅ 접수" not in r.stdout:
+                print(f"⚠️ SELL {name}({code}) 거절: {r.stdout.strip()}")
+            else:
+                actions.append(("SELL", code, name, pr, d))
         elif d["pr"] is not None and d["pr"] <= -8.0:
             print(f"⚠️  손실 주의 {name}({code}) {pr:+.1f}% (신호기준 -10%, 비상 -30%)")
 
@@ -460,7 +455,8 @@ def main():
     buy_candidates = [(c, d) for c, d in analysis.items()
                       if len(d["buy_conds"]) >= buy_min
                       and c not in sold_codes
-                      and c not in holdings]
+                      and c not in holdings
+                      and len(d["sell_conds"]) == 0]
 
     if buy_candidates:
         dart_results = {}
@@ -497,11 +493,13 @@ def main():
                 cmd = [sys.executable, TRADE_PY, "--code", code, "--name", name,
                        "--action", "BUY", "--confidence", str(conf), "--ratio", str(ratio),
                        "--reason", reason]
-                r = subprocess.run(cmd, capture_output=True, text=True)
-                print(r.stdout.strip())
+                r = run_trade(cmd, f"BUY {name}({code})")
                 if r.returncode != 0:
                     send_error(f"BUY {name}({code}) 주문 실패", r.stderr.strip() or r.stdout.strip())
-                actions.append(("BUY", code, name, None, d))
+                elif "✅ 접수" not in r.stdout:
+                    print(f"⚠️ BUY {name}({code}) 거절: {r.stdout.strip()}")
+                else:
+                    actions.append(("BUY", code, name, None, d))
 
     if not actions:
         print("→ 전종목 HOLD")
@@ -518,10 +516,9 @@ def main():
             hint = f" | 최고신호 {best[1]['name']}({best[0]}) 0/{buy_min}개"
         else:
             hint = ""
-        period = "⚠️자제" if caution_period else ""
-        market = f"KODEX RSI{k_rsi:.0f}/{k_chg:+.1f}%{'⚠️과열' if overheated else ''}"
-        cash_warn = " | 💸예수금부족(매수불가)" if cash < 50000 else ""
-        msg = f"[{now_str}] HOLD {period}| {market} | 보유:{hold}{cash_warn}{hint}"
+        market    = f"KODEX RSI{k_rsi:.0f}/{k_chg:+.1f}%{'⚠️' if overheated else ''}"
+        cash_warn = " | 💸예수금부족" if cash < 50000 else ""
+        msg = f"[{now_str}] HOLD | {market} | 보유:{hold}{cash_warn}{hint}"
         send_discord(msg)
     else:
         msg = build_discord_msg(now_str, cash, k_rsi, k_chg, overheated,

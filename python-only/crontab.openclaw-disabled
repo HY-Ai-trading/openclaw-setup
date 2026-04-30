@@ -1,0 +1,7 @@
+# OpenClaw trading cron disabled at 2026-04-30.
+# To re-enable, remove leading "# " from the two schedule lines and run:
+# crontab /home/hyunho/openclaw-setup/python-only/crontab.openclaw-disabled
+#
+# 트레이딩 자동매매
+# 50 8  * * 1-5 cd "/home/hyunho/openclaw-setup/python-only" && /usr/bin/python3 -u scan.py >> "/home/hyunho/openclaw-setup/python-only/logs/$(date +\%Y-\%m-\%d).log" 2>&1
+# */2 9-15 * * 1-5 cd "/home/hyunho/openclaw-setup/python-only" && /usr/bin/python3 check_time.py | grep -q SKIP || /usr/bin/python3 -u scan.py >> "/home/hyunho/openclaw-setup/python-only/logs/$(date +\%Y-\%m-\%d).log" 2>&1
