@@ -14,6 +14,15 @@ if now.weekday() >= 5:
     print('SKIP: 주말')
     sys.exit(0)
 
+try:
+    import holidays
+    kr_holidays = holidays.KR(years=now.year)
+    if now.date() in kr_holidays:
+        print(f'SKIP: 공휴일 ({kr_holidays[now.date()]})')
+        sys.exit(0)
+except ImportError:
+    pass
+
 t = now.hour * 100 + now.minute
 if t < 900 or t > 1530:
     print(f'SKIP: 장외시간 KST {now.hour}:{now.minute:02d}')
