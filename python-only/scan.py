@@ -51,6 +51,7 @@ NAME_MAP = {
     "079550":"LIG넥스원", "035420":"NAVER",      "035720":"카카오",    "259960":"크래프톤",
     "015760":"한국전력",  "034020":"두산에너빌", "078930":"GS",        "061250":"화일약품",
     "217820":"원익피앤이", "001510":"SK증권",     "056080":"유진로봇",   "084850":"아이티엠반도체",
+    "001570":"금양",
 }
 
 WATCHLIST = [
@@ -96,6 +97,7 @@ WATCHLIST = [
     "001510",  # SK증권
     "056080",  # 유진로봇
     "084850",  # 아이티엠반도체
+    "001570",  # 금양 (현재 거래정지, 해제 시 자동 편입)
     # "XXXXXX",  # 컨텍 ← 종목코드 확인 후 추가
 ]
 
@@ -125,7 +127,7 @@ CORP_MAP = {
     # 나머지는 stock_code 검색으로 폴백
 }
 
-BAD_KW  = ["불성실공시","영업정지","과징금","횡령","손실","부도","감사의견","검찰","수사","파산","회생"]
+BAD_KW  = ["불성실공시","영업정지","과징금","횡령","손실","부도","감사의견","검찰","수사","파산","회생","거래정지"]
 GOOD_KW = ["수주","계약체결","실적개선","자사주취득","영업이익","매출증가","흑자"]
 
 
@@ -389,7 +391,14 @@ def main():
         t_buy = int(q.get("tot_buy_req") or 0)
         t_sel = int(q.get("tot_sel_req") or 1)
         bid_r = round(t_buy / max(t_sel, 1), 2)
-        if price == 0: continue
+        if price == 0:
+            if code in holdings:
+                now_str_err = datetime.now().strftime("%H:%M:%S")
+                send_error(f"보유종목 거래정지 감지 {name}({code})",
+                           "호가 0원 — 거래정지 또는 거래중단. 매도 불가 상태.")
+            else:
+                print(f"⛔ {name}({code}) 호가 없음 (거래정지 의심)")
+            continue
         if price > cash and code not in holdings: continue
         # indicators 없는 종목은 quote 기반 표시만 (신호 없음)
 
