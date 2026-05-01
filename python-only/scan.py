@@ -15,9 +15,10 @@ from dotenv import load_dotenv
 
 load_dotenv(os.path.join(os.path.dirname(__file__), ".env"))
 
-BASE_DIR   = os.path.dirname(os.path.abspath(__file__))
-TRADE_PY   = os.path.join(BASE_DIR, "trade.py")
-NOTIFY_PY  = os.path.join(BASE_DIR, "notify.py")
+BASE_DIR      = os.path.dirname(os.path.abspath(__file__))
+TRADE_PY      = os.path.join(BASE_DIR, "trade.py")
+NOTIFY_PY     = os.path.join(BASE_DIR, "notify.py")
+CLOSED_FILE   = os.path.join(BASE_DIR, ".market_closed_today")
 SERVER_URL = os.getenv("TRADING_SERVER_URL", "")
 API_KEY    = os.getenv("SIGNAL_SECRET_KEY", "")
 DART_KEY   = os.getenv("DART_API_KEY", "")
@@ -43,12 +44,13 @@ def _rate_wait():
 NAME_MAP = {
     "005930":"삼성전자",  "000660":"SK하이닉스", "042700":"한미반도체","403870":"HPSP",
     "058470":"리노공업",  "051910":"LG화학",     "006400":"삼성SDI",   "247540":"에코프로비엠",
-    "003670":"포스코퓨처엠","066970":"엘앤에프",  "137040":"피엔티",    "068270":"셀트리온",
+    "003670":"포스코퓨처엠","066970":"엘앤에프",  "137040":"아우토크립트","068270":"셀트리온",
     "207940":"삼성바이오", "005380":"현대차",     "000270":"기아",      "012330":"현대모비스",
-    "105560":"KB금융",    "055550":"신한지주",   "086790":"하나금융",  "012450":"한화에어로",
+    "105560":"KB금융",    "055550":"신한지주",   "086790":"하나금융",  "138040":"메리츠금융",
+    "012450":"한화에어로",
     "079550":"LIG넥스원", "035420":"NAVER",      "035720":"카카오",    "259960":"크래프톤",
-    "015760":"한국전력",  "034020":"두산에너빌", "078930":"GS",        "061250":"유진로봇",
-    "217820":"이루다",    "001510":"SK증권",     "056080":"유진에너지", "084850":"아이티엠반도체",
+    "015760":"한국전력",  "034020":"두산에너빌", "078930":"GS",        "061250":"화일약품",
+    "217820":"원익피앤이", "001510":"SK증권",     "056080":"유진로봇",   "084850":"아이티엠반도체",
 }
 
 WATCHLIST = [
@@ -64,7 +66,7 @@ WATCHLIST = [
     "247540",  # 에코프로비엠
     "003670",  # 포스코퓨처엠
     "066970",  # 엘앤에프
-    "137040",  # 피엔티
+    "137040",  # 아우토크립트
     # 바이오
     "068270",  # 셀트리온
     "207940",  # 삼성바이오로직스
@@ -76,6 +78,7 @@ WATCHLIST = [
     "105560",  # KB금융
     "055550",  # 신한지주
     "086790",  # 하나금융지주
+    "138040",  # 메리츠금융지주
     # 방산
     "012450",  # 한화에어로스페이스
     "079550",  # LIG넥스원
@@ -88,10 +91,10 @@ WATCHLIST = [
     "034020",  # 두산에너빌리티
     "078930",  # GS
     # 기타
-    "061250",  # 유진로봇
-    "217820",  # 이루다
+    "061250",  # 화일약품
+    "217820",  # 원익피앤이
     "001510",  # SK증권
-    "056080",  # 유진에너지솔루션
+    "056080",  # 유진로봇
     "084850",  # 아이티엠반도체
     # "XXXXXX",  # 컨텍 ← 종목코드 확인 후 추가
 ]
@@ -103,8 +106,9 @@ EXCLUDE = ["KODEX","TIGER","KINDEX","RISE","ACE","PLUS","KoAct","HANARO",
 CORP_MAP = {
     "005930":"00126380","000660":"00164779","035420":"00266961",
     "051910":"00401731","006400":"00164488","078930":"00108670",
-    "061250":"00648826","217820":"00877422","001510":"00112774",
-    "056080":"00631518","084850":"00741612",
+    "001510":"00112774",
+    "084850":"00741612",
+    # 061250(화일약품), 056080(유진로봇) DART 코드 미확인 → 폴백 검색 사용
     "015760":"00104427",  # 한국전력
     "034020":"00159161",  # 두산에너빌리티
     "042700":"00207536",  # 한미반도체
@@ -194,6 +198,21 @@ def run_trade(cmd, label):
         if attempt < 2:
             time.sleep(3)
     return r
+
+def record_market_closed():
+    today = datetime.now().strftime("%Y-%m-%d")
+    count = 0
+    if os.path.exists(CLOSED_FILE):
+        try:
+            d, c = open(CLOSED_FILE).read().strip().split(":")
+            if d == today:
+                count = int(c)
+        except Exception:
+            pass
+    count += 1
+    open(CLOSED_FILE, "w").write(f"{today}:{count}")
+    if count >= 5:
+        print(f"⛔ 장종료 {count}회 감지 → 오늘 스캔 중단")
 
 def send_error(context: str, err: str):
     now = datetime.now().strftime("%H:%M:%S")
@@ -445,6 +464,8 @@ def main():
                 send_error(f"SELL {name}({code}) 주문 실패", r.stderr.strip() or r.stdout.strip())
             elif "✅ 접수" not in r.stdout:
                 print(f"⚠️ SELL {name}({code}) 거절: {r.stdout.strip()}")
+                if "장종료" in r.stdout:
+                    record_market_closed()
             else:
                 actions.append(("SELL", code, name, pr, d))
         elif d["pr"] is not None and d["pr"] <= -8.0:
@@ -498,6 +519,8 @@ def main():
                     send_error(f"BUY {name}({code}) 주문 실패", r.stderr.strip() or r.stdout.strip())
                 elif "✅ 접수" not in r.stdout:
                     print(f"⚠️ BUY {name}({code}) 거절: {r.stdout.strip()}")
+                    if "장종료" in r.stdout:
+                        record_market_closed()
                 else:
                     actions.append(("BUY", code, name, None, d))
 

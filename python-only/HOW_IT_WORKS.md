@@ -1,61 +1,90 @@
 # python-only 자동매매 구조
 
-AI 없이 순수 Python + Linux cron으로 동작하는 버전.
-뉴스 분석 없음. 기술 지표만으로 매수/매도 결정.
+AI 없이 순수 Python + Linux cron으로 동작.
+기술 지표 + DART 공시 필터링으로 매수/매도 결정.
 
 ## 구성 요소
 
 ```
 Linux cron
-    └─ scan.py (Python 단독 실행)
-            ├─ your-api-server.example.com (브릿지 서버) → 키움증권 API
+    └─ check_time.py → SKIP이면 종료, OK면 scan.py 실행
+            ├─ 브릿지 서버 → 키움증권 API
             ├─ DART API (opendart.fss.or.kr) — 공시 조회
             └─ notify.py → Discord Bot API → DM
 ```
 
-## 실행 흐름
+## cron 스케줄
 
-### cron 스케줄 (cron-setup.sh로 등록)
 ```
-50 8  * * 1-5   python3 scan.py   # 8:50 장 시작 전
-*/20 9-15 * * 1-5 python3 scan.py  # 9:00~15:20 20분마다
+50 8   * * 1-5   scan.py 직접 실행       # 장 시작 전 8:50
+*/2 9-15 * * 1-5  check_time.py → scan.py  # 장중 2분마다
 ```
 
-### scan.py 내부 흐름
+## check_time.py 필터
 
-1. **데이터 수집** (ThreadPoolExecutor 병렬)
-   - `GET /kiwoom/account` — 예수금, 보유종목, 수익률
-   - `GET /kiwoom/indicators/069500` — KODEX200 RSI/등락률 (시장 과열 판단)
-   - `GET /kiwoom/quote/{code}` — 종목별 호가
-   - `GET /kiwoom/indicators/{code}` — RSI, BB, MA, 거래량비
-   - DART API — 전일 이후 공시 (악재/호재 키워드 매칭)
+- 주말 → SKIP
+- 법정공휴일 (`holidays.KR`) → SKIP
+- 근로자의 날 5/1 (KRX 휴장, holidays.KR 미포함) → SKIP
+- 장외시간 (9:00 전, 15:30 후) → SKIP
+- 장종료 거부 5회 누적 시 당일 → SKIP (다음 거래일 자동 재개)
 
-2. **매도 판단** (보유종목, 신호 3개↑)
-   - 수익률 ≥ +5% / RSI ≥ 78 / 당일 ≥ +4% / BB 상단 / 호가비 < 0.5
+## 매수 조건 (7개 중 3개↑ 충족)
 
-3. **매수 판단** (관심종목, 신호 2개↑)
-   - RSI ≤ 50 / 거래량 ≥ 1.3x / 당일 ≤ -1% / BB 하단 / MA 골든 / 호가비 ≥ 1.3
-   - KODEX200 과열 시 기준 3개↑로 강화
-   - DART 악재 공시 종목 제외
-
-4. **주문 실행** — `subprocess → trade.py`
-   - 호가 확인 → 수량 계산 → HMAC 서명 → `POST /signal/receive`
-
-5. **Discord 전송** — `subprocess → notify.py`
-
-## 장단점
-
-| 장점 | 단점 |
+| 조건 | 기준 |
 |------|------|
-| 빠름 (API 직접 호출) | 뉴스 반영 불가 |
-| 비용 없음 (AI 토큰 없음) | 돌발 공시/뉴스 대응 못함 |
-| 안정적 (LLM 오작동 없음) | 기술 지표만으로 판단 |
+| RSI | ≤ 45 |
+| 거래량 | ≥ 1.3x (평균 대비) |
+| 당일 하락 | ≤ -1.0% |
+| BB 하단 | 하단 터치 |
+| MA 골든크로스 | MA5 > MA20 |
+| 호가비 | ≥ 1.2 (매수잔량 우위) |
+| buy_rt | ≥ 130 |
+
+**제외 조건**: 매도 신호가 이미 있는 종목 (RSI≥80, BB상단 등) → 매수 안 함  
+**DART 악재 공시** 종목 → 매수 제외  
+**DART 호재 공시** 종목 → 신호 +1개 보너스
+
+## 매도 조건
+
+| 조건 | 기준 | 필요 신호 수 |
+|------|------|------------|
+| 수익 실현 | 수익률 ≥ +7% | 1개 (단독 트리거) |
+| RSI 과매수 | ≥ 80 | 2개↑ |
+| 급등 | 당일 ≥ +7% | 2개↑ |
+| BB 상단 | 상단 터치 | 2개↑ |
+| BB 상단 반전 | 상단 + 하락 전환 | 2개↑ |
+| 매도우위 | 호가비 < 0.5 | 2개↑ |
+| 손실 누적 | 수익률 ≤ -10% | 2개↑ |
+
+**비상손절**: 수익률 ≤ -30% → 즉시 매도 (신호 무관)
+
+## 매수 수량 계산
+
+```
+수량 = floor(예수금 × ratio / 매수1호가)
+ratio: 후보 1개 → 0.50 / 2개 → 0.35 / 3개↑ → 0.25
+```
+
+매도는 항상 **전량 매도**.
+
+## 2단계 지표 조회 (API 절약)
+
+1. Phase 1: 전 종목 호가(quote) 조회
+2. Phase 2: 호가비(매수잔량/매도잔량) 상위 5개 + 보유종목만 indicators 조회
+
+→ 키움 API 1시간 1000회 제한 준수 (요청 간 1.5초 간격)
 
 ## 환경변수 (.env)
+
 ```
-TRADING_SERVER_URL=https://your-api-server.example.com
+TRADING_SERVER_URL=...
 SIGNAL_SECRET_KEY=...
 DART_API_KEY=...
 DISCORD_BOT_TOKEN=...
 DISCORD_USER_ID=...
 ```
+
+## 관심종목 (WATCHLIST)
+
+반도체, 2차전지, 바이오, 자동차, 금융, 방산, AI/IT, 에너지, 기타
+총 33종목 + 랭킹 상위 5개 동적 추가
