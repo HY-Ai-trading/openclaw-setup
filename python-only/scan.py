@@ -429,13 +429,11 @@ def main():
         # ── 매도 신호 (롱 관점) ────────────────────────────────
         sell_conds = []
         if pr is not None:
-            if pr >= 7.0:   sell_conds.append(f"수익+{pr:.1f}%")  # ③ 수익 단독 트리거
-            if pr <= -10.0: sell_conds.append(f"손실{pr:.1f}%")
+            if pr >= 7.0: sell_conds.append(f"수익+{pr:.1f}%")
         if rsi  and rsi  >= 80:   sell_conds.append(f"RSI{rsi:.0f}")
         if chg  and chg  >= 7.0:  sell_conds.append(f"급등+{chg:.1f}%")
         if bb_u and close >= bb_u: sell_conds.append("BB상단")
-        if bb_u and close >= bb_u and chg < 0: sell_conds.append("BB상단반전")
-        if bid_r and bid_r < 0.5: sell_conds.append(f"매도우위{bid_r:.1f}")
+        if ma5  and ma20 and ma5 < ma20: sell_conds.append("MA데드")
 
         b, s = len(buy_conds), len(sell_conds) if code in holdings else 0
         print(f"{code:<8}{name:<8}{price:>8,}  {rsi:>5.1f} {chg:>+7.1f}% {vol:>6.1f}x {bb_pos:>6} {bid_r:>5.2f}  {b}/{s}")
@@ -454,7 +452,7 @@ def main():
         sc   = d["sell_conds"]
 
         # 비상손절(-30%) 즉시, 수익구간(+7%↑)은 1개만, 나머지는 2개↑
-        emergency_stop = (d["pr"] is not None and d["pr"] <= -30.0)
+        emergency_stop = (d["pr"] is not None and d["pr"] <= -15.0)
         profit_exit    = (d["pr"] is not None and d["pr"] >= 7.0)
         sell_min = 1 if profit_exit else 2
 
@@ -478,7 +476,7 @@ def main():
             else:
                 actions.append(("SELL", code, name, pr, d))
         elif d["pr"] is not None and d["pr"] <= -8.0:
-            print(f"⚠️  손실 주의 {name}({code}) {pr:+.1f}% (신호기준 -10%, 비상 -30%)")
+            print(f"⚠️  손실 주의 {name}({code}) {pr:+.1f}% (비상손절 -15%)")
 
     # ── BUY 판단 ─────────────────────────────────────────────
     sold_codes     = {code for act, code, *_ in actions if act == "SELL"}
