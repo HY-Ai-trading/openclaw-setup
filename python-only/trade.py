@@ -36,6 +36,8 @@ def request_json(method, path, *, content=None, headers=None):
             )
             resp.raise_for_status()
             return resp.json()
+        except httpx.HTTPStatusError as e:
+            sys.exit(f"❌ 서버 오류 {e.response.status_code}: {e.response.text[:300]}")
         except (httpx.ConnectError, httpx.ConnectTimeout, httpx.ReadTimeout) as e:
             last_err = e
             if attempt < 2:
@@ -110,10 +112,12 @@ def main():
             sys.exit("❌ 호가 0 → 장외시간, 주문 취소")
         if buy_price > cash:
             sys.exit(f"❌ 1주 가격({buy_price:,}원) > 예수금({cash:,}원) → 주문 취소")
-        ratio = min(args.ratio, 0.90)
-        qty   = max(1, int(cash * ratio / buy_price))
-        price = buy_price  # 매수1호가(bid)로 지정가 → 매도1호가보다 1틱 저렴
-        print(f"📌 BUY 지정가: {price:,}원 × {qty}주 = {price*qty:,}원")
+        stop_pct  = 0.05   # 손절 가정 5%
+        risk_qty  = max(1, int(cash * 0.01 / (buy_price * stop_pct)))
+        ratio_qty = max(1, int(cash * min(args.ratio, 0.90) / buy_price))
+        qty   = min(risk_qty, ratio_qty)
+        price = buy_price
+        print(f"📌 BUY 리스크({risk_qty}주) vs 신호({ratio_qty}주) → {qty}주 | {price:,}원 = {price*qty:,}원")
 
     else:  # SELL
         if buy_price <= 0:
