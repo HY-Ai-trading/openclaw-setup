@@ -112,8 +112,8 @@ def main():
             sys.exit("❌ 호가 0 → 장외시간, 주문 취소")
         if buy_price > cash:
             sys.exit(f"❌ 1주 가격({buy_price:,}원) > 예수금({cash:,}원) → 주문 취소")
-        stop_pct  = 0.05   # 손절 가정 5%
-        risk_qty  = max(1, int(cash * 0.01 / (buy_price * stop_pct)))
+        stop_pct  = 0.012  # 실제 비상손절 -1.2% 기준
+        risk_qty  = max(1, int(cash * 0.03 / (buy_price * stop_pct)))  # 자본 3% 리스크
         ratio_qty = max(1, int(cash * min(args.ratio, 0.90) / buy_price))
         qty   = min(risk_qty, ratio_qty)
         price = buy_price

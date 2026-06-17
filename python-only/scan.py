@@ -48,35 +48,35 @@ def _rate_wait():
         _last_req_time = time.time()
 
 NAME_MAP = {
-    "005930":"삼성전자",  "403870":"HPSP",
+    "005930":"삼성전자",  "084850":"아이티엠반도체",
     "086520":"에코프로",  "247540":"에코프로비엠","003670":"포스코퓨처엠","066970":"엘앤에프",
     "000270":"기아",
     "105560":"KB금융",    "055550":"신한지주",   "086790":"하나금융",  "138040":"메리츠금융",
     "064350":"현대로템",  "042660":"한화오션",   "272210":"한화시스템",
     "329180":"HD현대중공업","011200":"HMM",
-    "015760":"한국전력",  "034020":"두산에너빌", "010950":"에쓰오일",  "096770":"SK이노베이션",
-    "035720":"카카오",    "017670":"SK텔레콤",   "030200":"KT",
+    "015760":"한국전력",  "034020":"두산에너빌", "010950":"에쓰오일",  "010140":"삼성중공업",
+    "066570":"LG전자",    "017670":"SK텔레콤",   "030200":"KT",
     "000720":"현대건설",  "003490":"대한항공",   "004020":"현대제철",
-    "032830":"삼성생명",  "078930":"GS",
+    "047050":"포스코인터내셔널","078930":"GS",
     "000150":"두산",      "000880":"한화",
 }
 
 WATCHLIST = [
     # 반도체 (2)
-    "005930",  # 삼성전자        ~7만  (거래량 1위)
-    "403870",  # HPSP            ~5만  (반도체 장비)
+    "005930",  # 삼성전자            ~7만  (거래량 1위)
+    "084850",  # 아이티엠반도체      ~8만  ★실적+1,534원
     # 2차전지 (4) — 모멘텀 강한 테마
-    "086520",  # 에코프로        ~6만
-    "247540",  # 에코프로비엠    가격변동
-    "003670",  # 포스코퓨처엠    가격변동
-    "066970",  # 엘앤에프        가격변동
+    "086520",  # 에코프로            ~6만
+    "247540",  # 에코프로비엠        가격변동
+    "003670",  # 포스코퓨처엠        가격변동
+    "066970",  # 엘앤에프            가격변동
     # 자동차 (1)
-    "000270",  # 기아            ~8만
+    "000270",  # 기아                ~8만
     # 금융 (4) — 시장 상승 시 추종
-    "105560",  # KB금융          ~7만
-    "055550",  # 신한지주        ~4만
-    "086790",  # 하나금융지주    ~6만
-    "138040",  # 메리츠금융지주  ~8만
+    "105560",  # KB금융              ~7만
+    "055550",  # 신한지주            ~4만
+    "086790",  # 하나금융지주        ~6만
+    "138040",  # 메리츠금융지주      ~8만
     # 방산/조선/해운 (5) — 모멘텀 강한 테마
     "064350",  # 현대로템        ~5만  (방산)
     "042660",  # 한화오션        ~6만  (조선)
@@ -84,23 +84,23 @@ WATCHLIST = [
     "329180",  # HD현대중공업    가격변동 (조선)
     "011200",  # HMM             ~1.5만 (해운, 고변동성)
     # 에너지 (4)
-    "015760",  # 한국전력        ~2만
-    "034020",  # 두산에너빌리티  ~2만
-    "010950",  # 에쓰오일        ~6만
-    "096770",  # SK이노베이션    ~9만
-    # IT/통신 (3)
-    "035720",  # 카카오          ~4만
-    "017670",  # SK텔레콤        ~5만
-    "030200",  # KT              ~3만
-    # 저가 대형주 (5)
-    "000720",  # 현대건설        ~3만
-    "003490",  # 대한항공        ~2만
-    "004020",  # 현대제철        ~3만
-    "032830",  # 삼성생명        ~9만
-    "078930",  # GS              ~4만
+    "015760",  # 한국전력            ~2만  ★실적+1,417원
+    "034020",  # 두산에너빌리티      ~2만
+    "010950",  # 에쓰오일            ~6만
+    "010140",  # 삼성중공업          ~1만  (초저가 조선 테마, HPSP 대체)
+    # IT/통신 + 가전 (4)
+    "066570",  # LG전자              ~7만  (고유동성 IT, 카카오 대체)
+    "017670",  # SK텔레콤            ~5만
+    "030200",  # KT                  ~3만
+    "047050",  # 포스코인터내셔널    ~6만  (에너지무역, 삼성생명 대체)
+    # 저가 대형주 (4)
+    "000720",  # 현대건설            ~3만
+    "003490",  # 대한항공            ~2만  ★실적+1,649원
+    "004020",  # 현대제철            ~3만  ★실적+773원
+    "078930",  # GS                  ~4만  ★실적+62원
     # 그룹 지주 (2) — 테마 확산 수혜
-    "000150",  # 두산            ~2만  (두산에너빌 모회사)
-    "000880",  # 한화            ~3만  (한화오션·한화시스템 모회사)
+    "000150",  # 두산                ~2만  (두산에너빌 모회사)
+    "000880",  # 한화                ~3만  (한화오션·한화시스템 모회사)
 ]  # 총 30개
 
 EXCLUDE = ["KODEX","TIGER","KINDEX","RISE","ACE","PLUS","KoAct","HANARO",
@@ -554,7 +554,7 @@ def main():
             first_open = float(candles[0].get("open") or candles[0].get("close") or 0)
             if first_open > 0:
                 chg_real = (close - first_open) / first_open * 100
-                if abs(chg) < 0.01 and abs(chg_real) > 0.5:  # 일봉=0%인데 실제 움직임 있으면 보정
+                if abs(chg) < 0.01 and abs(chg_real) > 0.1:  # 일봉=0%인데 실제 움직임 있으면 보정
                     chg = chg_real
 
         # ── 매수 신호 ──────────────────────────────────────────────
@@ -576,28 +576,59 @@ def main():
         if   bid_r >= 2.0: buy_score += 2; buy_conds.append(f"호가{bid_r:.1f}★")
         elif bid_r >= 1.3: buy_score += 1; buy_conds.append(f"호가{bid_r:.1f}")
 
-        # ④ RSI 건강 구간
+        # ④ 체결강도 (100=균형, 130+=매수 우세)
+        if   brt >= 130: buy_score += 2; buy_conds.append(f"체결{brt:.0f}★")
+        elif brt >= 110: buy_score += 1; buy_conds.append(f"체결{brt:.0f}")
+
+        # ⑤ RSI 건강 구간
         if rsi_use and 45 <= rsi_use <= 65:
                              buy_score += 1; buy_conds.append(f"RSI{rsi_use:.0f}")
 
-        # ⑤ 5분봉 연속 상승
+        # ⑥ 5분봉 연속 상승 (모멘텀 지속)
         if len(candles) >= 3:
             cls3 = [float(c.get("close", 0)) for c in candles[-3:]]
             if all(v > 0 for v in cls3) and cls3[0] < cls3[1] < cls3[2]:
                 buy_score += 1; buy_conds.append("연속상승")
 
-        # ── 수익 목표 고정 2.5% ───────────────────────────────────
-        exit_target = 2.5
+        # ⑦ 5분봉 최근 10봉 고점 돌파 (브레이크아웃 핵심 신호)
+        if len(closes_5m) >= 11:
+            recent_high = max(closes_5m[-11:-1])
+            if recent_high > 0 and close > recent_high * 1.002:
+                buy_score += 2; buy_conds.append("고점돌파★")
+            elif recent_high > 0 and close > recent_high:
+                buy_score += 1; buy_conds.append("고점돌파")
+
+        # ⑧ 5분봉 거래량 스파이크 (최근 5봉 평균 대비 현재봉)
+        vols_5m = [float(c.get("volume", 0)) for c in candles]
+        if len(vols_5m) >= 6:
+            avg_vol = sum(vols_5m[-6:-1]) / 5
+            last_vol = vols_5m[-1]
+            if avg_vol > 0:
+                if   last_vol >= avg_vol * 2.0: buy_score += 2; buy_conds.append("볼륨스파이크★")
+                elif last_vol >= avg_vol * 1.5: buy_score += 1; buy_conds.append("볼륨급증")
+
+        # ⑨ MA 골든크로스 (5분봉 MA5 > MA20)
+        if ma5_use and ma20_use and ma5_use > ma20_use:
+            buy_score += 1; buy_conds.append("MA골든")
+
+        # ⑩ BB 하단 반등 (지지선에서 매수 — 눌림목 단타)
+        if bb_l_use and close <= bb_l_use * 1.005 and chg >= 0:
+            buy_score += 1; buy_conds.append("BB반등")
+
+        # ── 수익 목표: 신호 강도에 따라 차등 ────────────────────────
+        if   buy_score >= 10: exit_target = 2.5
+        elif buy_score >= 7:  exit_target = 2.0
+        else:                 exit_target = 1.5   # 약한 신호 → 빠른 익절
         sell_conds = []
         if code in holdings:   # 보유 종목만 매도 신호 계산
             if pr is not None:
                 effective_target = exit_targets_store.get(code, exit_target)
                 if pr >= effective_target:
                     sell_conds.append(f"수익+{pr:.1f}%(목표{effective_target:.0f}%)")
-            if rsi_use  and rsi_use  >= 70:                           sell_conds.append(f"RSI{rsi_use:.0f}")
+            if rsi_use  and rsi_use  >= 70 and pr is not None and pr >= 0.5: sell_conds.append(f"RSI{rsi_use:.0f}")
             if chg      and chg      >= 5.0 and pr is not None and pr >= 1.0: sell_conds.append(f"급등+{chg:.1f}%")
             if bb_u_use and close    >= bb_u_use and pr is not None and pr >= 1.0: sell_conds.append("BB상단")
-            if ma5_use  and ma20_use and ma5_use < ma20_use:          sell_conds.append("MA데드")
+            if ma5_use  and ma20_use and ma5_use < ma20_use and pr is not None and pr >= 0.3: sell_conds.append("MA데드")
 
         s = len(sell_conds) if code in holdings else 0
         src = "5분" if rsi_5m is not None else "일봉"
@@ -637,7 +668,7 @@ def main():
             sc = d["sell_conds"]
 
         # 비상손절(-1.5%) 즉시 — 새 전략: 빠른 손절로 큰 손실 방지
-        emergency_stop = (d["pr"] is not None and d["pr"] <= -1.5)
+        emergency_stop = (d["pr"] is not None and d["pr"] <= -1.2)  # 빠른 손절로 자본 회전
         # 트레일링: 최고점 대비 1.5% 이상 반락 시 청산 (최고 +3% → +1.5% 이하면 매도)
         trailing_stop  = (peaks.get(code, 0) >= 2.0 and d["pr"] is not None
                           and d["pr"] < peaks.get(code, 0) - 1.5)
@@ -704,7 +735,7 @@ def main():
     h, m = now.hour, now.minute
     no_buy_time = (
         (h < 9) or
-        (h == 9 and m < 30) or
+        (h == 9 and m < 20) or    # 9:20 이전만 금지 (시초가 안정 후 바로 진입)
         (h == 11 and m >= 30) or
         (h == 12) or
         (h == 13 and m < 30) or   # 점심 (13:00~13:30 금지)
@@ -712,7 +743,7 @@ def main():
         (h >= 15)
     )
     gold_window      = not no_buy_time and (h == 9 or (h == 10 and m < 30))
-    late_morning     = not no_buy_time and h == 10 and m >= 30
+    late_morning     = not no_buy_time and ((h == 10 and m >= 30) or (h == 11 and m < 30))
     afternoon_window = not no_buy_time and ((h == 13 and m >= 30) or (h == 14 and m < 30))
 
     if gold_window:         effective_buy_min = buy_min          # 3pt
@@ -735,22 +766,38 @@ def main():
     elif bear_market:
         print(f"📉 {bear_reason} — 신규 매수 중단")
         buy_candidates = []
-    elif afternoon_window and len(holdings) > 0:
-        print(f"⏰ 오후 재개 — 보유 종목 있음 → 신규 매수 중단")
+    elif afternoon_window and len(holdings) >= 2:
+        print(f"⏰ 오후 재개 — 보유 2종목 이상 → 신규 매수 중단")
         buy_candidates = []
     else:
         buy_candidates = [(c, d) for c, d in analysis.items()
                           if d.get("buy_score", 0) >= effective_buy_min
-                          and c not in sold_codes
+                          and (c not in sold_codes or d.get("buy_score", 0) >= 5)  # 강신호면 재매수 허용
                           and c not in holdings
                           and len(d["sell_conds"]) == 0
-                          and d["chg"] >= -0.5                # 급락 종목 제외
+                          and d["chg"] >= (0.3 if (k_chg >= 1.5 and d.get("buy_score",0) < 5) else -0.5)  # 강신호(5pt+)는 완화
                           and d["chg"] <= 8.0                 # 과열 제외
                           and k_chg >= -2.0                   # bear_market 기준과 통일
-                          and d["rsi"] < 78
+                          and d["rsi"] > 0 and d["rsi"] < 78   # rsi=0 = 데이터 없음, 매수 금지
                           and (d["vol"] > 0 or d["bid_r"] >= 1.3)
                           and d["bid_r"] <= 15.0
                           and len(holdings) < 3]
+
+    # 점수 충분하지만 필터에 막힌 종목 이유 출력
+    for c, d in analysis.items():
+        sc = d.get("buy_score", 0)
+        if sc < effective_buy_min or c in holdings or no_buy_time or bear_market: continue
+        reasons = []
+        if c in sold_codes and sc < 5:               reasons.append(f"당일매도(재매수={sc}pt<5)")
+        if d["chg"] < (0.3 if (k_chg >= 1.5 and sc < 5) else -0.5): reasons.append(f"chg{d['chg']:+.1f}%<기준")
+        if d["chg"] > 8.0:                           reasons.append(f"과열chg{d['chg']:+.1f}%")
+        if d["rsi"] <= 0:                            reasons.append("RSI=0(데이터없음)")
+        if d["rsi"] >= 78:                           reasons.append(f"RSI과열{d['rsi']:.0f}")
+        if d["vol"] <= 0 and d["bid_r"] < 1.3:       reasons.append("거래량없음")
+        if d["bid_r"] > 15.0:                        reasons.append(f"호가비이상{d['bid_r']:.1f}")
+        if len(holdings) >= 3:                       reasons.append("보유3종목만")
+        if reasons:
+            print(f"🚫 {d['name']}({c}) {sc}pt 차단: {' / '.join(reasons)}")
 
     if buy_candidates:
         dart_results = {}
@@ -774,11 +821,11 @@ def main():
                 name = d["name"]
                 # 점수 기반 신뢰도: 3점→0.70, 5점→0.80, 7점→0.88, 9점↑→0.94
                 conf = min(0.70 + (n - 3) * 0.04, 0.94)
-                # 점수 기반 비율: 3점→20%, +1점당+4%, 최대 40%
+                # 점수 기반 비율: 3pt→35%, +1pt당+5%, 최대 65%
                 # 후보 많을수록 상한 낮춰 리스크 분산
-                sig_ratio = min(0.20 + (n - 3) * 0.04, 0.40)
-                if   len(valid_buys) >= 3: ratio = min(sig_ratio, 0.25)
-                elif len(valid_buys) == 2: ratio = min(sig_ratio, 0.30)
+                sig_ratio = min(0.35 + (n - 3) * 0.05, 0.65)
+                if   len(valid_buys) >= 3: ratio = min(sig_ratio, 0.40)
+                elif len(valid_buys) == 2: ratio = min(sig_ratio, 0.50)
                 else:                      ratio = sig_ratio
                 conds = "/".join(d["buy_conds"])
                 reason = (f"점수{n}pt(기준{buy_min}pt) | "
