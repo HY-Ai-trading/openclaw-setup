@@ -937,14 +937,19 @@ def main():
     elif late_window:       effective_buy_min = buy_min + 3      # 6pt — 마감직전 강신호만
     else:                   effective_buy_min = buy_min + 2
 
-    # KODEX RSI 약세 구간: 기준 +2pt 가중 — 7/8, 7/10 RSI33 같은 약세장엔 강신호만 진입
-    # 기대값 분석에서 RSI<45인 날 대부분 손절 → 고점수 신호만 허용
+    # KODEX 데드크로스(MA하락추세) + RSI<50: 7/17~7/22 전 거래 손절 패턴
+    # k_dead 단독으로 +3pt — RSI35~50 구간 하락추세 진입 차단
+    if k_dead and not bear_market:
+        effective_buy_min += 3
+        print(f"📊 KODEX 데드크로스 — 매수기준 {effective_buy_min}pt로 상향(+3)")
+
+    # KODEX RSI 약세: k_dead 아닌 경우에도 추가 보수적 적용
     if k_rsi < 45 and not bear_market:
-        if k_chg < 1.0:  # 약세 지속 → 보수적
+        if k_chg < 1.0:
             effective_buy_min += 2
             print(f"📊 KODEX RSI{k_rsi:.0f} 약세({k_chg:+.1f}%) — 매수기준 {effective_buy_min}pt로 상향")
-        else:  # 과매도 반등장 → 기준 유지 (7/21 RSI30/+3.8% 같은 날 허용)
-            print(f"📊 KODEX RSI{k_rsi:.0f} 과매도 반등{k_chg:+.1f}% — 기준 유지")
+        else:  # 과매도 반등장 — k_dead 이미 +3 적용됐으므로 추가 없음
+            print(f"📊 KODEX RSI{k_rsi:.0f} 과매도 반등{k_chg:+.1f}% — 데드크로스 기준 유지")
 
     block_reason = None
     if no_buy_time:
@@ -988,6 +993,7 @@ def main():
                           and c not in exit_targets_store     # 오늘 이미 매수 접수한 종목 중복 매수 방지
                           and len(d["sell_conds"]) == 0
                           and d["chg"] >= (0.3 if (k_chg >= 1.5 and d.get("buy_score",0) < 4) else -0.5)
+                          and (k_chg < 2.0 or d["chg"] >= k_chg * 0.3)  # 강반등날 역행 종목 차단
                           and d["chg"] <= (5.0 if d.get("buy_score", 0) >= 7 else 3.0)  # 오버익스텐션 방지
                           # ── 고수 규칙 (기대값 분석 기반) ────────────────────────
                           and d["rsi"] >= 35                  # RSI 35 미만 = 아직 하락 중, 바닥 잡기 금지
