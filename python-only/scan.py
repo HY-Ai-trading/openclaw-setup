@@ -2,12 +2,11 @@
 scan.py (python-only) — 분석 + 판단 + 주문 + Discord 전부 Python 처리
 AI 불필요. Linux cron 2분마다 실행.
 
-전략 요약 (단타):
-  매수: 신호 2개↑ (RSI≤55 [5분봉], 거래량1.3x, 하락-1%~-3%, BB하단 [5분봉], MA골 [5분봉], 호가비1.2, buy_rt130)
-        거래량≥1.3x 또는 호가비≥1.2 반드시 포함 / 매도신호 없는 종목만 / DART 악재 제외
-        9:20 전 / 14:30 후 / 지수 -1%↓ 시 신규 매수 중단 / 당일 -3%↓ 이상 급락 종목 제외
-  매도: 수익+2%(단독) / RSI≥70, 급등+5%, BB상단, MA데드 중 2개↑ / 비상손절 -5%
-        15:10↑ 장 마감 전 보유 전량 청산
+전략 요약 (단타, 공격적 모드):
+  매수: 상대강도·거래량·호가비·체결강도·RSI·연속상승·고점돌파·볼륨스파이크·MA골든·BB반등 점수 합산
+        9:20~15:00 매수, 점심/마감직전은 강신호(6pt+)만 / 하락장(-1.5%)·지수롤오버·연속손실3회·일일손실4%p 시 중단
+  매도: 신호 강도별 목표수익 2~4% / 비상손절 -1.0%(하락장 -0.7%) / 트레일링(+1.5%↑ 후 -1.0%p, 수수료 이상 수익시만)
+        15:10↑ 마감 청산 (수익 1.5%↑면 오버나이트 보유)
 """
 import sys, os, httpx, subprocess, time, threading, json
 sys.stdout.reconfigure(line_buffering=True)
@@ -23,7 +22,14 @@ NOTIFY_PY     = os.path.join(BASE_DIR, "notify.py")
 CLOSED_FILE         = os.path.join(BASE_DIR, ".market_closed_today")
 PEAKS_FILE          = os.path.join(BASE_DIR, ".profit_peaks.json")
 SOLD_TODAY_FILE     = os.path.join(BASE_DIR, ".sold_today.json")
+KCHG_HIST_FILE      = os.path.join(BASE_DIR, ".kchg_history.json")
+DAILY_RISK_FILE     = os.path.join(BASE_DIR, ".daily_risk.json")
+OVERNIGHT_FILE      = os.path.join(BASE_DIR, ".overnight_hold.json")
 LOCK_FILE           = os.path.join(BASE_DIR, ".scan_lock")
+ERROR_SUPPRESS_FILE = os.path.join(BASE_DIR, ".error_suppress.json")
+COOLDOWN_FILE       = os.path.join(BASE_DIR, ".cooldown_until.json")
+
+MAX_DAILY_BUYS = 5   # 하루 최대 매수 횟수 (과매매 방지)
 EXIT_TARGETS_FILE   = os.path.join(BASE_DIR, ".exit_targets.json")
 SERVER_URL = os.getenv("TRADING_SERVER_URL", "")
 API_KEY    = os.getenv("SIGNAL_SECRET_KEY", "")
@@ -52,6 +58,7 @@ NAME_MAP = {
     "086520":"에코프로",  "247540":"에코프로비엠","003670":"포스코퓨처엠","066970":"엘앤에프",
     "000270":"기아",
     "105560":"KB금융",    "055550":"신한지주",   "086790":"하나금융",  "138040":"메리츠금융",
+    "316140":"우리금융",  "032640":"LG유플러스",
     "064350":"현대로템",  "042660":"한화오션",   "272210":"한화시스템",
     "329180":"HD현대중공업","011200":"HMM",
     "015760":"한국전력",  "034020":"두산에너빌", "010950":"에쓰오일",  "010140":"삼성중공업",
@@ -72,11 +79,13 @@ WATCHLIST = [
     "066970",  # 엘앤에프            가격변동
     # 자동차 (1)
     "000270",  # 기아                ~8만
-    # 금융 (4) — 시장 상승 시 추종
+    # 금융 (6) — 시장 상승 시 추종
     "105560",  # KB금융              ~7만
     "055550",  # 신한지주            ~4만
     "086790",  # 하나금융지주        ~6만
     "138040",  # 메리츠금융지주      ~8만
+    "316140",  # 우리금융지주        ~1.5만 (저가 금융, 주수 극대화)
+    "032640",  # LG유플러스          ~1만   (저가 통신, 주수 극대화)
     # 방산/조선/해운 (5) — 모멘텀 강한 테마
     "064350",  # 현대로템        ~5만  (방산)
     "042660",  # 한화오션        ~6만  (조선)
@@ -85,12 +94,12 @@ WATCHLIST = [
     "011200",  # HMM             ~1.5만 (해운, 고변동성)
     # 에너지 (4)
     "015760",  # 한국전력            ~2만  ★실적+1,417원
-    "034020",  # 두산에너빌리티      ~2만
+    "034020",  # 두산에너빌리티      ~9만 (원자력 테마로 급등, 가격 갱신 06/25)
     "010950",  # 에쓰오일            ~6만
     "010140",  # 삼성중공업          ~1만  (초저가 조선 테마, HPSP 대체)
     # IT/통신 + 가전 (4)
     "066570",  # LG전자              ~7만  (고유동성 IT, 카카오 대체)
-    "017670",  # SK텔레콤            ~5만
+    "017670",  # SK텔레콤            ~9만 (가격 갱신 06/25)
     "030200",  # KT                  ~3만
     "047050",  # 포스코인터내셔널    ~6만  (에너지무역, 삼성생명 대체)
     # 저가 대형주 (4)
@@ -102,10 +111,6 @@ WATCHLIST = [
     "000150",  # 두산                ~2만  (두산에너빌 모회사)
     "000880",  # 한화                ~3만  (한화오션·한화시스템 모회사)
 ]  # 총 30개
-
-EXCLUDE = ["KODEX","TIGER","KINDEX","RISE","ACE","PLUS","KoAct","HANARO",
-           "레버리지","인버스","ETN","ETF","리츠","채권","부동산","인프라",
-           "선물","액티브","나스닥","S&P","다우","미국","중국","일본","글로벌"]
 
 CORP_MAP = {
     "005930":"00126380",  # 삼성전자
@@ -258,6 +263,70 @@ def save_peaks(peaks):
     today = datetime.now().strftime("%Y-%m-%d")
     json.dump({"date": today, "peaks": peaks}, open(PEAKS_FILE, "w"))
 
+def load_kchg_history():
+    today = datetime.now().strftime("%Y-%m-%d")
+    if os.path.exists(KCHG_HIST_FILE):
+        try:
+            d = json.load(open(KCHG_HIST_FILE))
+            if d.get("date") == today:
+                return d.get("hist", [])
+        except Exception:
+            pass
+    return []
+
+def save_kchg_history(hist):
+    today = datetime.now().strftime("%Y-%m-%d")
+    json.dump({"date": today, "hist": hist}, open(KCHG_HIST_FILE, "w"))
+
+def load_daily_risk():
+    today = datetime.now().strftime("%Y-%m-%d")
+    if os.path.exists(DAILY_RISK_FILE):
+        try:
+            d = json.load(open(DAILY_RISK_FILE))
+            if d.get("date") == today:
+                return {"streak": d.get("streak", 0), "loss_sum": d.get("loss_sum", 0.0),
+                        "buy_count": d.get("buy_count", 0),
+                        "exit_stats": d.get("exit_stats", {"stop": 0, "trail": 0, "target": 0, "signal": 0})}
+        except Exception:
+            pass
+    return {"streak": 0, "loss_sum": 0.0, "buy_count": 0,
+            "exit_stats": {"stop": 0, "trail": 0, "target": 0, "signal": 0}}
+
+def save_daily_risk(streak, loss_sum, buy_count=0, exit_stats=None):
+    today = datetime.now().strftime("%Y-%m-%d")
+    json.dump({"date": today, "streak": streak, "loss_sum": loss_sum,
+               "buy_count": buy_count, "exit_stats": exit_stats or {}},
+              open(DAILY_RISK_FILE, "w"))
+
+def load_cooldown() -> float:
+    """손절 후 쿨다운 종료 타임스탬프. 0이면 쿨다운 없음."""
+    today = datetime.now().strftime("%Y-%m-%d")
+    if os.path.exists(COOLDOWN_FILE):
+        try:
+            d = json.load(open(COOLDOWN_FILE))
+            if d.get("date") == today:
+                return float(d.get("until_ts", 0))
+        except Exception:
+            pass
+    return 0.0
+
+def save_cooldown(until_ts: float):
+    today = datetime.now().strftime("%Y-%m-%d")
+    json.dump({"date": today, "until_ts": until_ts}, open(COOLDOWN_FILE, "w"))
+
+def load_overnight_hold():
+    if os.path.exists(OVERNIGHT_FILE):
+        try:
+            d = json.load(open(OVERNIGHT_FILE))
+            return set(d.get("codes", []))
+        except Exception:
+            pass
+    return set()
+
+def save_overnight_hold(codes):
+    today = datetime.now().strftime("%Y-%m-%d")
+    json.dump({"date": today, "codes": list(codes)}, open(OVERNIGHT_FILE, "w"))
+
 def load_sold_today():
     today = datetime.now().strftime("%Y-%m-%d")
     if os.path.exists(SOLD_TODAY_FILE):
@@ -291,13 +360,31 @@ def save_exit_targets(targets):
     json.dump({"date": today, "targets": targets}, open(EXIT_TARGETS_FILE, "w"))
 
 def send_error(context: str, err: str):
-    now = datetime.now().strftime("%H:%M:%S")
-    msg = f"🚨 [{now}] 에러 — {context}\n{err[:500]}"
+    # 같은 에러 타입은 30분에 한 번만 Discord 전송 (530 서버 다운 등 반복 에러 폭탄 방지)
+    now_ts = datetime.now().timestamp()
+    suppressed: dict = {}
+    if os.path.exists(ERROR_SUPPRESS_FILE):
+        try:
+            suppressed = json.load(open(ERROR_SUPPRESS_FILE))
+        except Exception:
+            pass
+    key = context[:60]
+    if now_ts - suppressed.get(key, 0) < 1800:
+        print(f"🔕 [{datetime.now().strftime('%H:%M:%S')}] 에러(억제) — {context}: {err[:80]}")
+        return
+    suppressed[key] = now_ts
+    suppressed = {k: v for k, v in suppressed.items() if now_ts - v < 7200}
+    try:
+        json.dump(suppressed, open(ERROR_SUPPRESS_FILE, "w"))
+    except Exception:
+        pass
+    now_s = datetime.now().strftime("%H:%M:%S")
+    msg = f"🚨 [{now_s}] 에러 — {context}\n{err[:500]}"
     print(msg)
     send_discord(msg)
 
 def build_discord_msg(now_str, cash, k_rsi, k_chg, overheated, k_dead, buy_min,
-                      holdings, analysis, actions):
+                      holdings, analysis, actions, locked_codes=frozenset()):
     has_buy  = any(a[0] == "BUY"  for a in actions)
     has_sell = any(a[0] == "SELL" for a in actions)
     label    = ("🟢BUY" if has_buy else "") + ("🟡SELL" if has_sell else "")
@@ -320,7 +407,7 @@ def build_discord_msg(now_str, cash, k_rsi, k_chg, overheated, k_dead, buy_min,
 
     # ── 보유 현황 ──
     if holdings:
-        parts = [f"{h.get('stock_name','?')[:4]} {h.get('profit_rate',0):+.1f}%"
+        parts = [f"{h.get('stock_name','?')[:4]} {h.get('profit_rate',0):+.1f}%{'🔒' if c in locked_codes else ''}"
                  for c, h in holdings.items()]
         lines.append(f"📦 {' | '.join(parts)}")
 
@@ -387,6 +474,11 @@ def calc_ma(closes, period):
         return None
     return sum(closes[-period:]) / period
 
+def has_momentum_signal(buy_conds: list) -> bool:
+    """수급/모멘텀 신호 1개 이상 → 순수 기술적 신호(RSI·MA·BB)만으로 진입 금지."""
+    momentum_kw = ("강세", "역행", "거래량", "연속상승", "고점돌파", "볼륨스파이크", "볼륨급증", "VCP", "양봉")
+    return any(any(kw in cond for kw in momentum_kw) for cond in buy_conds)
+
 
 def stock_name(code, quote=None, ind=None, holding=None):
     quote = quote or {}
@@ -400,13 +492,18 @@ def stock_name(code, quote=None, ind=None, holding=None):
 def main():
     # ── Phase 1: quote 전체 + 인프라 (4 + 34회) ────────────────
     with ThreadPoolExecutor(max_workers=10) as ex:
-        f_acct  = ex.submit(get, "/kiwoom/account")
-        f_k200  = ex.submit(get, "/kiwoom/indicators/069500")
-        f_rank1 = ex.submit(get, "/kiwoom/ranking?mrkt_tp=001&sort_tp=1")
-        f_rank2 = ex.submit(get, "/kiwoom/ranking?mrkt_tp=001&sort_tp=2")
+        f_acct   = ex.submit(get, "/kiwoom/account")
+        f_k200   = ex.submit(get, "/kiwoom/indicators/069500")
+        f_locked = ex.submit(get, "/kiwoom/locked")
         q_futs  = {ex.submit(fetch_quote, c): c for c in WATCHLIST}
         acct = f_acct.result(); k200 = f_k200.result()
-        rank1 = f_rank1.result(); rank2 = f_rank2.result()
+        locked_resp = f_locked.result()
+        if isinstance(locked_resp, list):
+            locked_codes = set(locked_resp)
+        elif isinstance(locked_resp, dict) and "_err" not in locked_resp:
+            locked_codes = set(locked_resp.get("locked") or locked_resp.get("locked_stocks") or [])
+        else:
+            locked_codes = set()
         quotes = {}
         for fut in as_completed(q_futs):
             code, q = fut.result(); quotes[code] = q
@@ -421,12 +518,13 @@ def main():
 
     if "_err" in k200:
         send_error("KODEX200 지표 조회 실패", k200["_err"])
+    api_error = "_err" in acct or "_err" in k200   # 핵심 API 오류 시 매수 신뢰 불가
     k_rsi   = float(k200.get("rsi_14")      or 50) if "_err" not in k200 else 50
     k_chg   = float(k200.get("change_rate") or 0)  if "_err" not in k200 else 0
     k_ma5   = float(k200.get("ma_5")        or 0)  if "_err" not in k200 else 0
     k_ma20  = float(k200.get("ma_20")       or 0)  if "_err" not in k200 else 0
     k_dead  = k_ma5 > 0 and k_ma20 > 0 and k_ma5 < k_ma20   # KODEX200 MA 데드크로스
-    overheated = k_chg <= -2.0 or k_rsi >= 80
+    overheated = k_chg <= -1.5 or k_rsi >= 80   # bear_market 기준(-1.5%)과 통일
     now     = datetime.now()
     buy_min = 3   # 오전 최소 점수 (상승1%+거래량1x+RSI = 3pt 가능)
     peaks            = load_peaks()
@@ -439,29 +537,14 @@ def main():
     for code, h in holdings.items():
         pr = h.get('profit_rate', 0)
         warn = " 🔴스탑로스임박" if pr <= -3.5 else (" ⚠️주의" if pr <= -2.0 else "")
-        print(f"📦 보유 {h.get('stock_name','?')}({code}) {h.get('quantity',0)}주 {pr:+.1f}%{warn}")
+        lock_tag = " 🔒잠금됨" if code in locked_codes else ""
+        print(f"📦 보유 {h.get('stock_name','?')}({code}) {h.get('quantity',0)}주 {pr:+.1f}%{warn}{lock_tag}")
 
-    # 랭킹 후보 (quote 없이 순위 데이터만 활용)
-    rank_map = {}
-    for data in [rank1, rank2]:
-        items = data if isinstance(data, list) else data.get("output", data.get("items", []))
-        if not isinstance(items, list): continue
-        for item in items[:20]:
-            name  = item.get("hts_kor_isnm", "")
-            code  = item.get("mksc_shrn_iscd", "").strip()
-            price = abs(int(item.get("cur_prc", 0) or 0))
-            if not code or not name or any(kw in name for kw in EXCLUDE): continue
-            if price == 0 or price > cash: continue
-            if code in rank_map: rank_map[code]["both"] = True
-            else: rank_map[code] = {"name": name, "price": price,
-                                    "sig": str(item.get("pred_pre_sig","")), "both": False}
+    # 랭킹 기반 비검증 종목 매수는 -15.5% 등 대형 손실 원인이었음 → 워치리스트로만 제한
+    all_codes = list(dict.fromkeys(WATCHLIST + list(holdings.keys())))
 
-    top_codes = [c for c, _ in sorted(rank_map.items(),
-                 key=lambda x: -(2*x[1]["both"]+(x[1]["sig"]=="5")))[:5]]
-    all_codes = list(dict.fromkeys(WATCHLIST + top_codes))
-
-    # 랭킹 신규 종목 quote 추가 조회
-    extra = [c for c in top_codes if c not in quotes]
+    # 워치리스트 밖 보유종목(과거 랭킹 매수 잔량 등) quote 보충 조회
+    extra = [c for c in holdings if c not in quotes]
     if extra:
         with ThreadPoolExecutor(max_workers=5) as ex:
             futs = {ex.submit(fetch_quote, c): c for c in extra}
@@ -477,9 +560,9 @@ def main():
         t_sel = int(q.get("tot_sel_req") or 1)
         bid_scores[code] = round(t_buy / max(t_sel, 1), 2)
 
-    top5 = sorted([c for c in bid_scores if c not in holdings],
-                  key=bid_scores.get, reverse=True)[:5]
-    ind_codes = list(dict.fromkeys(list(holdings.keys()) + top5))
+    top10 = sorted([c for c in bid_scores if c not in holdings],
+                   key=bid_scores.get, reverse=True)[:10]
+    ind_codes = list(dict.fromkeys(list(holdings.keys()) + top10))
 
     inds: dict = {}
     if ind_codes:
@@ -512,7 +595,6 @@ def main():
         bid_r = round(t_buy / max(t_sel, 1), 2)
         if price == 0:
             if code in holdings:
-                now_str_err = datetime.now().strftime("%H:%M:%S")
                 send_error(f"보유종목 거래정지 감지 {name}({code})",
                            "호가 0원 — 거래정지 또는 거래중단. 매도 불가 상태.")
             else:
@@ -562,8 +644,12 @@ def main():
         buy_conds = []
 
         # ① 주가 모멘텀 (시장 대비 상대강도)
+        # 시장이 급락 중(-1.5%↓)일 땐 상대강도가 분모 효과로 부풀려짐 → 절대 상승 요구
         rel_str = chg - k_chg
-        if   rel_str >= 1.5: buy_score += 3; buy_conds.append(f"강세+{rel_str:.1f}%★★")
+        if k_chg <= -1.5:
+            if   chg >= 0.5: buy_score += 2; buy_conds.append(f"역행+{chg:.1f}%★(급락장)")
+            elif chg >= 0.0: buy_score += 1; buy_conds.append(f"버팀+{chg:.1f}%(급락장)")
+        elif rel_str >= 1.5: buy_score += 3; buy_conds.append(f"강세+{rel_str:.1f}%★★")
         elif rel_str >= 0.3: buy_score += 2; buy_conds.append(f"강세+{rel_str:.1f}%★")
         elif chg >= 0.5:     buy_score += 1; buy_conds.append(f"상승+{chg:.1f}%")
 
@@ -615,20 +701,50 @@ def main():
         if bb_l_use and close <= bb_l_use * 1.005 and chg >= 0:
             buy_score += 1; buy_conds.append("BB반등")
 
-        # ── 수익 목표: 신호 강도에 따라 차등 ────────────────────────
-        if   buy_score >= 10: exit_target = 2.5
-        elif buy_score >= 7:  exit_target = 2.0
-        else:                 exit_target = 1.5   # 약한 신호 → 빠른 익절
+        # ⑪ MA20 상승추세 (Minervini Stage 2 — MA20이 우상향 = 기관 지속 매수 중)
+        # 25봉 이상 있을 때만: 현재 MA20 vs 5봉 전 MA20 비교
+        if len(closes_5m) >= 25:
+            ma20_prev5 = calc_ma(closes_5m[-25:-5], 20)
+            if ma20_use and ma20_prev5 and ma20_use > ma20_prev5 * 1.0005:
+                buy_score += 1; buy_conds.append("MA20상승")
+
+        # ⑫ VCP (Volatility Contraction Pattern) — Minervini/O'Neil 핵심 진입 패턴
+        # 볼륨 수축(매도 압력 소진) 후 돌파 시 급증 = 기관 매집 완료 후 브레이크아웃
+        if len(vols_5m) >= 8:
+            mid_avg  = sum(vols_5m[-7:-3]) / 4   # 3~7봉 전 평균 (기준, rec_avg와 겹침 없음)
+            rec_avg  = (sum(vols_5m[-3:-1]) / 2) if len(vols_5m) >= 3 else mid_avg
+            curr_vol = vols_5m[-1]
+            if mid_avg > 0:
+                if rec_avg < mid_avg * 0.75 and curr_vol > rec_avg * 2.0 and curr_vol > mid_avg:
+                    buy_score += 2; buy_conds.append("VCP★")   # 강한 수축 후 폭발적 돌파
+                elif rec_avg < mid_avg * 0.85 and curr_vol > rec_avg * 1.5:
+                    buy_score += 1; buy_conds.append("VCP")     # 약한 수축 후 확장
+
+        # ⑬ 양봉 매집 (O'Neil CANSLIM "S" — Supply/Demand)
+        # 최근 8봉 중 6봉 이상 양봉(close>open) = 기관이 조용히 지속 매수 중
+        if len(candles) >= 8:
+            up_cnt = sum(1 for c in candles[-8:]
+                         if float(c.get("close", 0)) > float(c.get("open", 0)))
+            if up_cnt >= 6:
+                buy_score += 1; buy_conds.append(f"양봉{up_cnt}/8")
+
+        # ── 수익 목표: 기대값 분석 결과 수익을 더 길게 가져가야 거래비용 초과 가능
+        # 평균수익이 최소 +1.67% 되어야 EV>0 → 기존 2/3/4% → 2.5/3.5/4.5%로 상향
+        if   buy_score >= 10: exit_target = 4.5
+        elif buy_score >= 7:  exit_target = 3.5
+        else:                 exit_target = 2.5
         sell_conds = []
-        if code in holdings:   # 보유 종목만 매도 신호 계산
+        if code in holdings and code not in locked_codes:   # 잠긴 종목은 매도 신호 계산 자체를 스킵
             if pr is not None:
                 effective_target = exit_targets_store.get(code, exit_target)
                 if pr >= effective_target:
-                    sell_conds.append(f"수익+{pr:.1f}%(목표{effective_target:.0f}%)")
-            if rsi_use  and rsi_use  >= 70 and pr is not None and pr >= 0.5: sell_conds.append(f"RSI{rsi_use:.0f}")
-            if chg      and chg      >= 5.0 and pr is not None and pr >= 1.0: sell_conds.append(f"급등+{chg:.1f}%")
-            if bb_u_use and close    >= bb_u_use and pr is not None and pr >= 1.0: sell_conds.append("BB상단")
-            if ma5_use  and ma20_use and ma5_use < ma20_use and pr is not None and pr >= 0.3: sell_conds.append("MA데드")
+                    sell_conds.append(f"수익+{pr:.1f}%(목표{effective_target:.1f}%)")
+            # RSI매도: 목표가 절반 이상 달성(pr>=1.0)했을 때만 — 너무 이른 RSI 매도가 평균수익을 깎음
+            if rsi_use  and rsi_use  >= 72 and pr is not None and pr >= 1.0: sell_conds.append(f"RSI{rsi_use:.0f}")
+            if chg      and chg      >= 5.0 and pr is not None and pr >= 1.5: sell_conds.append(f"급등+{chg:.1f}%")
+            # BB상단/MA데드: 수익이 충분히 났을 때만 — 0.3%에서 MA데드로 팔면 비용만 남음
+            if bb_u_use and close    >= bb_u_use and pr is not None and pr >= 1.5: sell_conds.append("BB상단")
+            if ma5_use  and ma20_use and ma5_use < ma20_use and pr is not None and pr >= 0.8: sell_conds.append("MA데드")
 
         s = len(sell_conds) if code in holdings else 0
         src = "5분" if rsi_5m is not None else "일봉"
@@ -636,10 +752,27 @@ def main():
         analysis[code] = dict(name=name, price=price, pr=pr, rsi=rsi_use, chg=chg,
                                vol=vol, bid_r=bid_r, bb_pos=bb_pos, ma_sig=ma_sig,
                                brt=brt, exit_target=exit_target, buy_score=buy_score,
-                               buy_conds=buy_conds, sell_conds=sell_conds)
+                               buy_conds=buy_conds, sell_conds=sell_conds,
+                               ma20_daily=ma20)
 
     print("\n" + "═"*50)
     actions = []
+
+    # 하락장 감지 (SELL 판단에도 사용 — bear_market 중엔 손절선 강화) — 공격적 모드: 기준 완화
+    bear_market = (k_chg <= -1.5 or (k_dead and k_rsi < 35))
+    bear_reason = (f"KODEX200 {k_chg:+.1f}% 급락" if k_chg <= -1.5
+                   else f"KODEX200 MA데드+RSI{k_rsi:.0f} 하락추세")
+
+    # 지수 롤오버 감지: 최근 30분 고점 대비 1.5%p 이상 빠지면 "오전 펌핑 후 꺾임"으로 판단
+    # (개별 종목 반등신호만 보고 꺾이는 지수에 계속 추가매수하다 손실 반복하는 패턴 차단)
+    kchg_hist = load_kchg_history()
+    now_ts = now.timestamp()
+    kchg_hist.append({"t": now_ts, "v": k_chg})
+    kchg_hist = [p for p in kchg_hist if now_ts - p["t"] <= 1800]  # 최근 30분만 유지
+    save_kchg_history(kchg_hist)
+    k_chg_peak30 = max((p["v"] for p in kchg_hist), default=k_chg)
+    rollover = (k_chg_peak30 - k_chg) >= 1.5 and not bear_market
+    rollover_reason = f"지수 고점({k_chg_peak30:+.1f}%)대비 {k_chg_peak30-k_chg:.1f}%p 롤오버"
 
     # ── SELL 판단 ─────────────────────────────────────────────
     force_close = now.hour > 15 or (now.hour == 15 and now.minute >= 10)
@@ -647,31 +780,44 @@ def main():
         print("🕐 15:10 이후 — 장 마감 청산 모드")
 
     # 전일 잔류 포지션 감지: 9:00~9:20 사이에 보유종목이 있으면 WSL 중단 등으로
-    # 어제 못 판 것 → 오버나이트 리스크 즉시 제거
+    # 어제 못 판 것 → 오버나이트 리스크 즉시 제거 (단, 어제 의도적으로 오버나이트 보유 결정한
+    # 종목은 제외 — 안 그러면 "수익+1.5%면 보유" 기능이 다음날 아침 무조건 청산으로 무효화됨)
     overnight_stale = (now.hour == 9 and now.minute <= 20)
+    intentional_overnight = load_overnight_hold()
     if overnight_stale and holdings:
-        print("⏰ 9:20 이전 보유종목 감지 — 전일 잔류 포지션 즉시 청산")
+        print("⏰ 9:20 이전 보유종목 감지 — 의도적 오버나이트 보유 외 즉시 청산")
+    overnight_holds_today = set()
+
+    _exit_types: list = []   # 당일 청산 유형 집계용 (stop/trail/target/signal)
 
     for code, d in analysis.items():
         if code not in holdings: continue
+        if code in locked_codes:
+            print(f"🔒 {d['name']}({code}) 잠금 — 매도 평가 스킵")
+            continue
         pr   = d["pr"] or 0
         name = d["name"]
         sc   = d["sell_conds"]
+        is_intentional_overnight = overnight_stale and code in intentional_overnight
 
         # 최고 수익 갱신 (트레일링 스탑 추적)
         if d["pr"] is not None:
             peaks[code] = max(peaks.get(code, d["pr"]), d["pr"])
 
-        # 전일 잔류 포지션은 손익 무관 즉시 청산
-        if overnight_stale:
+        # 전일 잔류 포지션은 손익 무관 즉시 청산 — 의도적 오버나이트 보유는 예외
+        if overnight_stale and not is_intentional_overnight:
             d["sell_conds"] = sc + ["전일잔류청산"]
             sc = d["sell_conds"]
 
-        # 비상손절(-1.5%) 즉시 — 새 전략: 빠른 손절로 큰 손실 방지
-        emergency_stop = (d["pr"] is not None and d["pr"] <= -1.2)  # 빠른 손절로 자본 회전
-        # 트레일링: 최고점 대비 1.5% 이상 반락 시 청산 (최고 +3% → +1.5% 이하면 매도)
-        trailing_stop  = (peaks.get(code, 0) >= 2.0 and d["pr"] is not None
-                          and d["pr"] < peaks.get(code, 0) - 1.5)
+        # 비상손절 — 거래비용(0.21%)을 감안, 손실을 더 빠르게 끊어야 기대값이 양수가 됨
+        # -0.8% 기준: 왕복 비용 0.21% 고려 시 실질 손실 ~1.0% = 목표수익 2.5%의 2.5배 손익비
+        stop_pct = -0.5 if (bear_market or rollover) else -0.8
+        emergency_stop = (d["pr"] is not None and d["pr"] <= stop_pct)
+        # 트레일링: 목표가 2.5%에 맞춰 +1.2% 이후 -0.8%p 반락 시 청산 (조기 이익 보호)
+        # 기존 +1.5%/−1.0%p → 목표가 2.5%의 절반 수준에서 보호 시작
+        trailing_stop  = (peaks.get(code, 0) >= 1.2 and d["pr"] is not None
+                          and d["pr"] < peaks.get(code, 0) - 0.8
+                          and d["pr"] >= 0.4)
         exit_tgt    = exit_targets_store.get(code, d.get("exit_target", 2.0))
         profit_exit = (d["pr"] is not None and d["pr"] >= exit_tgt)
         sell_min = 1 if profit_exit else 2
@@ -681,15 +827,20 @@ def main():
             d["sell_conds"] = sc + [f"트레일링(최고{peaks[code]:+.1f}%)"]
             sc = d["sell_conds"]
 
-        # 15:10 이후: 수익 +1.5% 이상이면 오버나이트 보유, 미만이면 청산
+        # 15:10 이후: 수익 +1.5% 이상이면 오버나이트 보유, 미만이면 무조건 청산
+        # (마감청산은 sell_min 충족 여부와 무관하게 강제 — 안 그러면 신호 부족으로 안 팔리고
+        #  그대로 밤새 남아 다음날 9시 전일잔류청산으로 더 나쁜 가격에 팔리는 사고가 났었음)
+        force_close_liquidate = False
         if force_close and not emergency_stop and not trailing_stop and len(sc) < sell_min:
             if d["pr"] is not None and d["pr"] >= 1.5:
                 print(f"💤 오버나이트 보유 {name}({code}) {pr:+.1f}% ≥ 1.5% — 내일 계속 관리")
+                overnight_holds_today.add(code)
             else:
                 d["sell_conds"] = sc + ["마감청산"]
                 sc = d["sell_conds"]
+                force_close_liquidate = True
 
-        if emergency_stop or trailing_stop or len(sc) >= sell_min:
+        if emergency_stop or trailing_stop or force_close_liquidate or len(sc) >= sell_min:
             if "마감청산" in sc:
                 conf, label = 0.80, "마감청산🕐"
             elif emergency_stop:
@@ -715,87 +866,163 @@ def main():
                     record_market_closed()
             else:
                 actions.append(("SELL", code, name, pr, d))
-                if d["pr"] is not None and d["pr"] < 0:
-                    add_sold_today(code)
+                _exit_types.append("stop" if emergency_stop else "trail" if trailing_stop else
+                                   "target" if profit_exit else "signal")
+                add_sold_today(code)   # 수익/손실 무관하게 당일 재매수 금지
+                # 비상손절 후 30분 쿨다운 — 나쁜 진입이었음을 인정하고 시장 재확인
+                if emergency_stop:
+                    cd_until = datetime.now().timestamp() + 1800
+                    save_cooldown(cd_until)
+                    print(f"⏸️  손절 쿨다운 발동 → {datetime.fromtimestamp(cd_until).strftime('%H:%M')}까지 신규 매수 차단")
                 peaks.pop(code, None)
                 exit_targets_store.pop(code, None)
                 save_exit_targets(exit_targets_store)
-        elif d["pr"] is not None and d["pr"] <= -1.0:
-            print(f"⚠️  손실 주의 {name}({code}) {pr:+.1f}% (비상손절 -1.5% 임박)")
+        elif d["pr"] is not None and d["pr"] <= stop_pct + 0.3:
+            print(f"⚠️  손실 주의 {name}({code}) {pr:+.1f}% (비상손절 {stop_pct:.1f}% 임박)")
+
+    # 마감 시점에 결정된 "내일까지 보유" 목록을 저장 (다음날 9:00~9:20 강제청산에서 제외됨)
+    if force_close:
+        save_overnight_hold(overnight_holds_today)
+
+    # ── 연속손실/일일손실 한도 — 진짜 고수는 나쁜 날엔 스스로 멈춤 ──
+    daily_risk = load_daily_risk()
+    streak, loss_sum, buy_count = daily_risk["streak"], daily_risk["loss_sum"], daily_risk["buy_count"]
+    exit_stats = daily_risk["exit_stats"]
+
+    # 손절 쿨다운 — 비상손절 후 30분간 신규 매수 차단 (연속 손절 패턴 방지)
+    cooldown_ts = load_cooldown()
+    in_cooldown = cooldown_ts > datetime.now().timestamp()
+
+    for act, code, name, pr, d in actions:
+        if act != "SELL" or pr is None: continue
+        if pr < 0:
+            streak += 1
+            loss_sum += pr
+        else:
+            streak = 0
+    for etype in _exit_types:
+        exit_stats[etype] = exit_stats.get(etype, 0) + 1
+    save_daily_risk(streak, loss_sum, buy_count, exit_stats)
+    risk_halt = streak >= 3 or loss_sum <= -4.0 or buy_count >= MAX_DAILY_BUYS
+    risk_halt_reason = (f"연속손실{streak}회" if streak >= 3
+                        else f"일일매수{buy_count}회한도({MAX_DAILY_BUYS}회)" if buy_count >= MAX_DAILY_BUYS
+                        else f"일일누적손실{loss_sum:.1f}%p")
 
     # ── BUY 판단 ─────────────────────────────────────────────
     sold_codes     = {code for act, code, *_ in actions if act == "SELL"}
     # ── 매수 필터 (시간대 / 지수 방향 / 진입 제한) ──────────────
     # ── 매수 시간대 (시장 미시구조 기반) ─────────────────────────
-    # 9:30~10:30 황금타임: 거래량 최고, 모멘텀 명확          → 3pt
+    # 9:20~10:30 황금타임: 거래량 최고, 모멘텀 명확          → 3pt
     # 10:30~11:30 오전후반: 모멘텀 지속, 약간 엄격           → 4pt
-    # 11:30~13:30 점심: 거래량 급감·허수 많음                → 매수 금지
-    # 13:30~14:00 오후재개: 보유 없을 때만 허용              → 4pt
-    # 14:00~      마감 리스크                                → 매수 금지
+    # 11:30~13:30 점심: 거래량 급감·허수 많음 → 완전금지 대신 강신호만(6pt)
+    # 13:30~14:30 오후재개                                   → 4pt
+    # 14:30~15:00 마감 직전 → 완전금지 대신 강신호만(6pt)
+    # 15:00~      장 마감                                     → 매수 금지
     h, m = now.hour, now.minute
     no_buy_time = (
         (h < 9) or
         (h == 9 and m < 20) or    # 9:20 이전만 금지 (시초가 안정 후 바로 진입)
-        (h == 11 and m >= 30) or
-        (h == 12) or
-        (h == 13 and m < 30) or   # 점심 (13:00~13:30 금지)
-        (h == 14 and m >= 30) or  # 14:30 이후 금지
         (h >= 15)
     )
     gold_window      = not no_buy_time and (h == 9 or (h == 10 and m < 30))
     late_morning     = not no_buy_time and ((h == 10 and m >= 30) or (h == 11 and m < 30))
     afternoon_window = not no_buy_time and ((h == 13 and m >= 30) or (h == 14 and m < 30))
+    lunch_window     = not no_buy_time and ((h == 11 and m >= 30) or h == 12 or (h == 13 and m < 30))
+    late_window      = not no_buy_time and (h == 14 and m >= 30)
 
     if gold_window:         effective_buy_min = buy_min          # 3pt
     elif late_morning:      effective_buy_min = buy_min + 1      # 4pt
     elif afternoon_window:  effective_buy_min = buy_min + 1      # 4pt
-    else:                   effective_buy_min = buy_min + 2      # fallback (도달 불가)
+    elif lunch_window:      effective_buy_min = buy_min + 3      # 6pt — 점심엔 강신호만
+    elif late_window:       effective_buy_min = buy_min + 3      # 6pt — 마감직전 강신호만
+    else:                   effective_buy_min = buy_min + 2
 
-    # 하락장 감지: -1% 이상 하락 OR 추세 하락(MA데드+RSI약세)
-    bear_market = (k_chg <= -2.0 or (k_dead and k_rsi < 35))
-    bear_reason = (f"KODEX200 {k_chg:+.1f}% 급락" if k_chg <= -1.5
-                   else f"KODEX200 MA데드+RSI{k_rsi:.0f} 하락추세")
+    # KODEX RSI 약세 구간: 기준 +2pt 가중 — 7/8, 7/10 RSI33 같은 약세장엔 강신호만 진입
+    # 기대값 분석에서 RSI<45인 날 대부분 손절 → 고점수 신호만 허용
+    if k_rsi < 45 and not bear_market:
+        if k_chg < 1.0:  # 약세 지속 → 보수적
+            effective_buy_min += 2
+            print(f"📊 KODEX RSI{k_rsi:.0f} 약세({k_chg:+.1f}%) — 매수기준 {effective_buy_min}pt로 상향")
+        else:  # 과매도 반등장 → 기준 유지 (7/21 RSI30/+3.8% 같은 날 허용)
+            print(f"📊 KODEX RSI{k_rsi:.0f} 과매도 반등{k_chg:+.1f}% — 기준 유지")
 
+    block_reason = None
     if no_buy_time:
         if h < 9:                  reason_nb = "장 미개장 (9:00 전)"
-        elif h == 9 and m < 30:    reason_nb = "시초가 혼조 (9:30 전)"
-        elif (h == 11 and m >= 30) or h == 12 or (h == 13 and m < 30): reason_nb = "점심시간 (11:30~13:30)"
-        else:                      reason_nb = "매수 세션 종료 (14:30↑)"
+        elif h == 9 and m < 20:    reason_nb = "시초가 혼조 (9:20 전)"
+        else:                      reason_nb = "장 마감 (15:00 이후)"
         print(f"⏰ {reason_nb} — 신규 매수 중단")
+        block_reason = reason_nb
+        buy_candidates = []
+    elif api_error:
+        print(f"⚠️ API 오류 (계좌/시세 신뢰 불가) — 신규 매수 중단")
+        block_reason = "API 오류(계좌/시세 신뢰 불가)"
         buy_candidates = []
     elif bear_market:
         print(f"📉 {bear_reason} — 신규 매수 중단")
+        block_reason = bear_reason
         buy_candidates = []
-    elif afternoon_window and len(holdings) >= 2:
-        print(f"⏰ 오후 재개 — 보유 2종목 이상 → 신규 매수 중단")
+    elif rollover:
+        print(f"📉 {rollover_reason} — 신규 매수 중단")
+        block_reason = rollover_reason
+        buy_candidates = []
+    elif risk_halt:
+        print(f"🛑 {risk_halt_reason} — 오늘 신규 매수 중단 (내일 리셋)")
+        block_reason = risk_halt_reason
+        buy_candidates = []
+    elif in_cooldown:
+        cd_str = datetime.fromtimestamp(cooldown_ts).strftime("%H:%M")
+        print(f"⏸️  손절 쿨다운 중 ({cd_str}까지) — 시장 재확인 대기")
+        block_reason = f"손절쿨다운({cd_str}까지)"
+        buy_candidates = []
+    elif afternoon_window and len(holdings) >= 4:
+        print(f"⏰ 오후 재개 — 보유 4종목 이상 → 신규 매수 중단")
+        block_reason = "오후 재개·보유 4종목↑"
         buy_candidates = []
     else:
         buy_candidates = [(c, d) for c, d in analysis.items()
                           if d.get("buy_score", 0) >= effective_buy_min
-                          and (c not in sold_codes or d.get("buy_score", 0) >= 5)  # 강신호면 재매수 허용
+                          and c not in sold_codes             # 이번 세션 매도 종목 재매수 금지
+                          and c not in sold_today_codes       # 오늘 이전 세션 매도 종목 재매수 금지
                           and c not in holdings
+                          and c not in exit_targets_store     # 오늘 이미 매수 접수한 종목 중복 매수 방지
                           and len(d["sell_conds"]) == 0
-                          and d["chg"] >= (0.3 if (k_chg >= 1.5 and d.get("buy_score",0) < 5) else -0.5)  # 강신호(5pt+)는 완화
-                          and d["chg"] <= 8.0                 # 과열 제외
-                          and k_chg >= -2.0                   # bear_market 기준과 통일
-                          and d["rsi"] > 0 and d["rsi"] < 78   # rsi=0 = 데이터 없음, 매수 금지
-                          and (d["vol"] > 0 or d["bid_r"] >= 1.3)
+                          and d["chg"] >= (0.3 if (k_chg >= 1.5 and d.get("buy_score",0) < 4) else -0.5)
+                          and d["chg"] <= (5.0 if d.get("buy_score", 0) >= 7 else 3.0)  # 오버익스텐션 방지
+                          # ── 고수 규칙 (기대값 분석 기반) ────────────────────────
+                          and d["rsi"] >= 35                  # RSI 35 미만 = 아직 하락 중, 바닥 잡기 금지
+                          and d["rsi"] < 75                   # RSI 75 이상 = 과매수, 천장 매수 금지
+                          and (k_chg >= 0.0 or d.get("buy_score", 0) >= 7)  # 지수 하락 중엔 강신호만
+                          and (d["vol"] >= 1.0 or d["bid_r"] >= 2.0)        # 수급 확인 필수: 평균거래량 이상(1.0x) or 강매수세
+                          and has_momentum_signal(d["buy_conds"])            # 모멘텀 신호 1개 이상 필수
+                          # 애널리스트 진입 원칙: 주가가 MA20 위 = 추세 상승 중인 종목만 매수
+                          # (MA20 아래는 하락추세로 간주 — 반등을 기대하는 바닥 잡기 금지)
+                          and (analysis[c].get("ma_sig") == "골"              # MA5>MA20 = 단기 골든크로스
+                               or d.get("buy_score", 0) >= 8)                # 강신호는 예외 허용
+                          # 일봉 MA20 아래 하락추세 종목 진입 금지 (엘앤에프 연속손절 방지)
+                          and (d.get("ma20_daily", 0) <= 0 or d["price"] >= d.get("ma20_daily", 0) * 0.97)
+                          # ───────────────────────────────────────────────────────
+                          and k_chg >= -1.5                   # bear_market 기준과 통일
                           and d["bid_r"] <= 15.0
-                          and len(holdings) < 3]
+                          and len(holdings) < 5]
 
     # 점수 충분하지만 필터에 막힌 종목 이유 출력
     for c, d in analysis.items():
         sc = d.get("buy_score", 0)
-        if sc < effective_buy_min or c in holdings or no_buy_time or bear_market: continue
+        if sc < effective_buy_min or c in holdings or no_buy_time or bear_market or rollover or risk_halt or api_error: continue
         reasons = []
-        if c in sold_codes and sc < 5:               reasons.append(f"당일매도(재매수={sc}pt<5)")
-        if d["chg"] < (0.3 if (k_chg >= 1.5 and sc < 5) else -0.5): reasons.append(f"chg{d['chg']:+.1f}%<기준")
-        if d["chg"] > 8.0:                           reasons.append(f"과열chg{d['chg']:+.1f}%")
+        if c in sold_codes or c in sold_today_codes: reasons.append("당일매도(재매수금지)")
+        if c in exit_targets_store:                  reasons.append("오늘매수완료(중복방지)")
+        if d["chg"] < (0.3 if (k_chg >= 1.5 and sc < 4) else -0.5): reasons.append(f"chg{d['chg']:+.1f}%<기준")
+        if d["chg"] > (5.0 if sc >= 7 else 3.0):    reasons.append(f"오버익스텐션chg{d['chg']:+.1f}%")
         if d["rsi"] <= 0:                            reasons.append("RSI=0(데이터없음)")
-        if d["rsi"] >= 78:                           reasons.append(f"RSI과열{d['rsi']:.0f}")
-        if d["vol"] <= 0 and d["bid_r"] < 1.3:       reasons.append("거래량없음")
+        if d["rsi"] < 35:                            reasons.append(f"RSI하락중{d['rsi']:.0f}(바닥잡기금지)")
+        if d["rsi"] >= 75:                           reasons.append(f"RSI과열{d['rsi']:.0f}(천장매수금지)")
+        if k_chg < 0.0 and sc < 7:                  reasons.append(f"지수하락중(k_chg{k_chg:+.1f}%,강신호7pt미만)")
+        if d["vol"] < 1.0 and d["bid_r"] < 2.0:     reasons.append(f"수급부족(vol{d['vol']:.1f}x<1.0,호가{d['bid_r']:.1f})")
+        if not has_momentum_signal(d["buy_conds"]):  reasons.append("모멘텀신호없음(기술적만)")
         if d["bid_r"] > 15.0:                        reasons.append(f"호가비이상{d['bid_r']:.1f}")
-        if len(holdings) >= 3:                       reasons.append("보유3종목만")
+        if len(holdings) >= 5:                       reasons.append("보유5종목만")
         if reasons:
             print(f"🚫 {d['name']}({c}) {sc}pt 차단: {' / '.join(reasons)}")
 
@@ -817,15 +1044,18 @@ def main():
             valid_buys.append((code, d, n, summary))
 
         if valid_buys:
+            # 점수 내림차순 → 동점 시 저가 종목 우선 (소액 자본에서 주수 극대화)
+            valid_buys.sort(key=lambda x: (x[2], -analysis[x[0]]["price"]), reverse=True)
+            valid_buys = valid_buys[:1]
             for code, d, n, dart_summary in valid_buys:
                 name = d["name"]
                 # 점수 기반 신뢰도: 3점→0.70, 5점→0.80, 7점→0.88, 9점↑→0.94
                 conf = min(0.70 + (n - 3) * 0.04, 0.94)
-                # 점수 기반 비율: 3pt→35%, +1pt당+5%, 최대 65%
-                # 후보 많을수록 상한 낮춰 리스크 분산
-                sig_ratio = min(0.35 + (n - 3) * 0.05, 0.65)
-                if   len(valid_buys) >= 3: ratio = min(sig_ratio, 0.40)
-                elif len(valid_buys) == 2: ratio = min(sig_ratio, 0.50)
+                # 점수 기반 비율: 3pt→45%, +1pt당+8%, 최대 90%
+                sig_ratio = min(0.45 + (n - 3) * 0.08, 0.90)
+                if   len(valid_buys) >= 4: ratio = min(sig_ratio, 0.45)
+                elif len(valid_buys) == 3: ratio = min(sig_ratio, 0.55)
+                elif len(valid_buys) == 2: ratio = min(sig_ratio, 0.65)
                 else:                      ratio = sig_ratio
                 conds = "/".join(d["buy_conds"])
                 reason = (f"점수{n}pt(기준{buy_min}pt) | "
@@ -850,6 +1080,9 @@ def main():
                     actions.append(("BUY", code, name, None, d))
                     exit_targets_store[code] = d["exit_target"]
                     save_exit_targets(exit_targets_store)
+                    buy_count += 1
+                    save_daily_risk(streak, loss_sum, buy_count, exit_stats)
+                    print(f"📊 오늘 매수 {buy_count}/{MAX_DAILY_BUYS}회")
 
     # 당일 peaks 저장 (매도 완료 종목 제외 후 저장)
     save_peaks(peaks)
@@ -859,7 +1092,7 @@ def main():
 
     # ── Discord ───────────────────────────────────────────────
     if not actions:
-        hold = " ".join(f"{h.get('stock_name','?')[:4]}({c}) {h.get('profit_rate',0):+.1f}%"
+        hold = " ".join(f"{h.get('stock_name','?')[:4]}({c}) {h.get('profit_rate',0):+.1f}%{'🔒' if c in locked_codes else ''}"
                         for c, h in holdings.items()) or "없음"
         best = max(analysis.items(), key=lambda x: x[1].get("buy_score", 0), default=None)
         if best and best[1].get("buy_score", 0) >= 1:
@@ -872,11 +1105,17 @@ def main():
         trend     = "⬇️" if k_dead else "⬆️"
         market    = f"KODEX RSI{k_rsi:.0f}/{k_chg:+.1f}%{trend}{'⚠️' if overheated else ''}"
         cash_warn = " | 💸예수금부족" if cash < 50000 else ""
-        msg = f"[{now_str}] HOLD | {market} | 보유:{hold}{cash_warn}{hint}"
+        block_tag = f" | 🚫매수중단:{block_reason}" if block_reason else ""
+        es = exit_stats
+        total_exits = sum(es.values())
+        exit_tag = (f" | 청산통계 손절{es.get('stop',0)}/트레일{es.get('trail',0)}"
+                    f"/목표가{es.get('target',0)}/신호{es.get('signal',0)}"
+                    if total_exits > 0 else "")
+        msg = f"[{now_str}] HOLD | {market} | 보유:{hold}{cash_warn}{block_tag}{exit_tag}{hint}"
         send_discord(msg)
     else:
         msg = build_discord_msg(now_str, cash, k_rsi, k_chg, overheated, k_dead,
-                                buy_min, holdings, analysis, actions)
+                                buy_min, holdings, analysis, actions, locked_codes)
         send_discord(msg)
 
     print(f"\n{msg}")

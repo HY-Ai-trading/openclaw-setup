@@ -112,9 +112,14 @@ def main():
             sys.exit("❌ 호가 0 → 장외시간, 주문 취소")
         if buy_price > cash:
             sys.exit(f"❌ 1주 가격({buy_price:,}원) > 예수금({cash:,}원) → 주문 취소")
-        stop_pct  = 0.012  # 실제 비상손절 -1.2% 기준
+        # 소액계좌 보호: 1주 가격이 의도한 투입금액보다 훨씬 비싸면 강제 풀베팅이 되므로 거절
+        intended_budget = cash * min(args.ratio, 0.90)
+        if buy_price > intended_budget * 1.5:
+            sys.exit(f"❌ 1주 가격({buy_price:,}원)이 의도한 투입금액({intended_budget:,.0f}원)의 1.5배 초과"
+                      f" → 강제 풀베팅 방지, 주문 취소")
+        stop_pct  = 0.008  # 실제 비상손절 -0.8% 기준 (scan.py와 동기화, 거래비용 감안 기대값 개선)
         risk_qty  = max(1, int(cash * 0.03 / (buy_price * stop_pct)))  # 자본 3% 리스크
-        ratio_qty = max(1, int(cash * min(args.ratio, 0.90) / buy_price))
+        ratio_qty = max(1, int(intended_budget / buy_price))
         qty   = min(risk_qty, ratio_qty)
         price = buy_price
         print(f"📌 BUY 리스크({risk_qty}주) vs 신호({ratio_qty}주) → {qty}주 | {price:,}원 = {price*qty:,}원")

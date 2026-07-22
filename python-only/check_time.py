@@ -18,8 +18,12 @@ if now.weekday() >= 5:
 try:
     import holidays
     kr_holidays = holidays.KR(years=now.year)
-    if now.date() in kr_holidays:
-        print(f'SKIP: 공휴일 ({kr_holidays[now.date()]})')
+    # 제헌절(7/17)은 2008년부터 법정공휴일 제외 → holidays 라이브러리 오류 보정
+    # 근로자의 날(5/1)은 KRX_EXTRA에서 별도 처리
+    LIBRARY_WRONG = {"제헌절"}
+    holiday_name = kr_holidays.get(now.date(), "")
+    if holiday_name and holiday_name not in LIBRARY_WRONG:
+        print(f'SKIP: 공휴일 ({holiday_name})')
         sys.exit(0)
 except ImportError:
     pass
