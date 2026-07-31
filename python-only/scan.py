@@ -759,7 +759,8 @@ def main():
     actions = []
 
     # 하락장 감지 (SELL 판단에도 사용 — bear_market 중엔 손절선 강화) — 공격적 모드: 기준 완화
-    bear_market = (k_chg <= -1.5 or (k_dead and k_rsi < 35))
+    # k_dead+RSI<45: 7/17~7/29 전 거래 손절 구간. k_chg>=5% 폭등일만 예외
+    bear_market = (k_chg <= -1.5 or (k_dead and k_rsi < 45 and k_chg < 5.0))
     bear_reason = (f"KODEX200 {k_chg:+.1f}% 급락" if k_chg <= -1.5
                    else f"KODEX200 MA데드+RSI{k_rsi:.0f} 하락추세")
 
@@ -937,12 +938,7 @@ def main():
     elif late_window:       effective_buy_min = buy_min + 3      # 6pt — 마감직전 강신호만
     else:                   effective_buy_min = buy_min + 2
 
-    # KODEX 데드크로스: 하락추세 억제. k_chg>=5% 폭등장은 추세전환 신호 → 면제
-    if k_dead and not bear_market and k_chg < 5.0:
-        effective_buy_min += 3
-        print(f"📊 KODEX 데드크로스 — 매수기준 {effective_buy_min}pt로 상향(+3)")
-    elif k_dead and k_chg >= 5.0:
-        print(f"📊 KODEX 데드크로스이나 폭등({k_chg:+.1f}%) — 기준 유지")
+
 
     # KODEX RSI 약세: k_dead 아닌 경우에도 추가 보수적 적용
     if k_rsi < 45 and not bear_market:
