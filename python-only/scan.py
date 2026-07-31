@@ -475,9 +475,15 @@ def calc_ma(closes, period):
     return sum(closes[-period:]) / period
 
 def has_momentum_signal(buy_conds: list) -> bool:
-    """수급/모멘텀 신호 1개 이상 → 순수 기술적 신호(RSI·MA·BB)만으로 진입 금지."""
-    momentum_kw = ("강세", "역행", "거래량", "연속상승", "고점돌파", "볼륨스파이크", "볼륨급증", "VCP", "양봉")
-    return any(any(kw in cond for kw in momentum_kw) for cond in buy_conds)
+    """단타 진입 기준: 거래량1.5x+ OR 볼륨스파이크 OR VCP★ OR 강세2%+ 중 1개 필수.
+    RSI·MA·체결강도·호가만으로는 진입 금지 — 실제 수급 확인 필수."""
+    # 거래량 신호: "거래량1.5x" "거래량2.3x★" "거래량3.0x★★" 형태
+    vol_confirmed = any("거래량" in c and ("x★" in c or
+                        any(float(c.split("x")[0].replace("거래량","")) >= 1.5
+                            for _ in [0] if c.replace("거래량","").split("x")[0].replace(".","").isdigit()))
+                        for c in buy_conds)
+    strong_kw = ("볼륨스파이크★", "VCP★", "역행", "강세")
+    return vol_confirmed or any(any(kw in c for kw in strong_kw) for c in buy_conds)
 
 
 def stock_name(code, quote=None, ind=None, holding=None):
@@ -526,7 +532,7 @@ def main():
     k_dead  = k_ma5 > 0 and k_ma20 > 0 and k_ma5 < k_ma20   # KODEX200 MA 데드크로스
     overheated = k_chg <= -1.5 or k_rsi >= 80   # bear_market 기준(-1.5%)과 통일
     now     = datetime.now()
-    buy_min = 3   # 오전 최소 점수 (상승1%+거래량1x+RSI = 3pt 가능)
+    buy_min = 5   # 단타 최소 점수: 거래량1.5x+강세1%+ 이상 조합 필수
     peaks            = load_peaks()
     sold_today_codes = load_sold_today()
     exit_targets_store = load_exit_targets()   # 매수 시점 수익목표 (스캔마다 덮어쓰기 방지)
@@ -643,38 +649,35 @@ def main():
         buy_score = 0
         buy_conds = []
 
-        # ① 주가 모멘텀 (시장 대비 상대강도)
-        # 시장이 급락 중(-1.5%↓)일 땐 상대강도가 분모 효과로 부풀려짐 → 절대 상승 요구
+        # ① 상대강도 — 시장 대비 얼마나 강한가 (단타 핵심 지표)
         rel_str = chg - k_chg
-        if k_chg <= -1.5:
-            if   chg >= 0.5: buy_score += 2; buy_conds.append(f"역행+{chg:.1f}%★(급락장)")
-            elif chg >= 0.0: buy_score += 1; buy_conds.append(f"버팀+{chg:.1f}%(급락장)")
-        elif rel_str >= 1.5: buy_score += 3; buy_conds.append(f"강세+{rel_str:.1f}%★★")
-        elif rel_str >= 0.3: buy_score += 2; buy_conds.append(f"강세+{rel_str:.1f}%★")
+        if k_chg <= -1.5:                                    # 급락장: 절대상승 종목만
+            if chg >= 1.0: buy_score += 3; buy_conds.append(f"역행+{chg:.1f}%★★(급락장)")
+            elif chg >= 0.5: buy_score += 2; buy_conds.append(f"역행+{chg:.1f}%★(급락장)")
+        elif rel_str >= 2.5: buy_score += 3; buy_conds.append(f"강세+{rel_str:.1f}%★★")
+        elif rel_str >= 1.0: buy_score += 2; buy_conds.append(f"강세+{rel_str:.1f}%★")
         elif chg >= 0.5:     buy_score += 1; buy_conds.append(f"상승+{chg:.1f}%")
 
-        # ② 거래량
+        # ② 거래량 — 기관/외국인 참여 여부 (1.0x 이하는 개인 노이즈, 점수 없음)
         if   vol >= 3.0: buy_score += 3; buy_conds.append(f"거래량{vol:.1f}x★★")
-        elif vol >= 1.5: buy_score += 2; buy_conds.append(f"거래량{vol:.1f}x★")
-        elif vol >= 1.0: buy_score += 1; buy_conds.append(f"거래량{vol:.1f}x")
+        elif vol >= 2.0: buy_score += 2; buy_conds.append(f"거래량{vol:.1f}x★")
+        elif vol >= 1.5: buy_score += 1; buy_conds.append(f"거래량{vol:.1f}x")
 
-        # ③ 호가비 (매수세 > 매도세)
-        if   bid_r >= 2.0: buy_score += 2; buy_conds.append(f"호가{bid_r:.1f}★")
-        elif bid_r >= 1.3: buy_score += 1; buy_conds.append(f"호가{bid_r:.1f}")
+        # ③ 호가비 (매수 잔량 / 매도 잔량 — 3x이상 = 기관 매수압력)
+        if   bid_r >= 3.0: buy_score += 3; buy_conds.append(f"호가{bid_r:.1f}★★")
+        elif bid_r >= 2.0: buy_score += 2; buy_conds.append(f"호가{bid_r:.1f}★")
+        elif bid_r >= 1.5: buy_score += 1; buy_conds.append(f"호가{bid_r:.1f}")
 
-        # ④ 체결강도 (100=균형, 130+=매수 우세)
-        if   brt >= 130: buy_score += 2; buy_conds.append(f"체결{brt:.0f}★")
-        elif brt >= 110: buy_score += 1; buy_conds.append(f"체결{brt:.0f}")
+        # ④ 체결강도 (130+=매수 우세, 150+=강력 매수)
+        if   brt >= 150: buy_score += 3; buy_conds.append(f"체결{brt:.0f}★★")
+        elif brt >= 130: buy_score += 2; buy_conds.append(f"체결{brt:.0f}★")
+        elif brt >= 115: buy_score += 1; buy_conds.append(f"체결{brt:.0f}")
 
-        # ⑤ RSI 건강 구간
-        if rsi_use and 45 <= rsi_use <= 65:
+        # ⑤ RSI 적정 구간 (과매수·과매도 제외한 모멘텀 구간)
+        if rsi_use and 48 <= rsi_use <= 68:
                              buy_score += 1; buy_conds.append(f"RSI{rsi_use:.0f}")
 
-        # ⑥ 5분봉 연속 상승 (모멘텀 지속)
-        if len(candles) >= 3:
-            cls3 = [float(c.get("close", 0)) for c in candles[-3:]]
-            if all(v > 0 for v in cls3) and cls3[0] < cls3[1] < cls3[2]:
-                buy_score += 1; buy_conds.append("연속상승")
+        # ⑥ (삭제) 연속상승 — 약신호, 강세+거래량으로 대체
 
         # ⑦ 5분봉 최근 10봉 고점 돌파 (브레이크아웃 핵심 신호)
         if len(closes_5m) >= 11:
@@ -697,16 +700,9 @@ def main():
         if ma5_use and ma20_use and ma5_use > ma20_use:
             buy_score += 1; buy_conds.append("MA골든")
 
-        # ⑩ BB 하단 반등 (지지선에서 매수 — 눌림목 단타)
-        if bb_l_use and close <= bb_l_use * 1.005 and chg >= 0:
-            buy_score += 1; buy_conds.append("BB반등")
+        # ⑩ (삭제) BB반등 — 하락추세 지지선 매수는 손절 반복 원인
 
-        # ⑪ MA20 상승추세 (Minervini Stage 2 — MA20이 우상향 = 기관 지속 매수 중)
-        # 25봉 이상 있을 때만: 현재 MA20 vs 5봉 전 MA20 비교
-        if len(closes_5m) >= 25:
-            ma20_prev5 = calc_ma(closes_5m[-25:-5], 20)
-            if ma20_use and ma20_prev5 and ma20_use > ma20_prev5 * 1.0005:
-                buy_score += 1; buy_conds.append("MA20상승")
+        # ⑪ (삭제) MA20상승 — 약신호, VCP★로 대체
 
         # ⑫ VCP (Volatility Contraction Pattern) — Minervini/O'Neil 핵심 진입 패턴
         # 볼륨 수축(매도 압력 소진) 후 돌파 시 급증 = 기관 매집 완료 후 브레이크아웃
@@ -720,13 +716,7 @@ def main():
                 elif rec_avg < mid_avg * 0.85 and curr_vol > rec_avg * 1.5:
                     buy_score += 1; buy_conds.append("VCP")     # 약한 수축 후 확장
 
-        # ⑬ 양봉 매집 (O'Neil CANSLIM "S" — Supply/Demand)
-        # 최근 8봉 중 6봉 이상 양봉(close>open) = 기관이 조용히 지속 매수 중
-        if len(candles) >= 8:
-            up_cnt = sum(1 for c in candles[-8:]
-                         if float(c.get("close", 0)) > float(c.get("open", 0)))
-            if up_cnt >= 6:
-                buy_score += 1; buy_conds.append(f"양봉{up_cnt}/8")
+        # ⑬ (삭제) 양봉매집 — 약신호, 거래량+체결강도로 대체
 
         # ── 수익 목표: 기대값 분석 결과 수익을 더 길게 가져가야 거래비용 초과 가능
         # 평균수익이 최소 +1.67% 되어야 EV>0 → 기존 2/3/4% → 2.5/3.5/4.5%로 상향
@@ -931,12 +921,12 @@ def main():
     lunch_window     = not no_buy_time and ((h == 11 and m >= 30) or h == 12 or (h == 13 and m < 30))
     late_window      = not no_buy_time and (h == 14 and m >= 30)
 
-    if gold_window:         effective_buy_min = buy_min          # 3pt
-    elif late_morning:      effective_buy_min = buy_min + 1      # 4pt
-    elif afternoon_window:  effective_buy_min = buy_min + 1      # 4pt
-    elif lunch_window:      effective_buy_min = buy_min + 3      # 6pt — 점심엔 강신호만
-    elif late_window:       effective_buy_min = buy_min + 3      # 6pt — 마감직전 강신호만
-    else:                   effective_buy_min = buy_min + 2
+    if gold_window:         effective_buy_min = buy_min          # 5pt
+    elif late_morning:      effective_buy_min = buy_min + 1      # 6pt
+    elif afternoon_window:  effective_buy_min = buy_min + 1      # 6pt
+    elif lunch_window:      effective_buy_min = buy_min + 3      # 8pt — 점심엔 강신호만
+    elif late_window:       effective_buy_min = buy_min + 3      # 8pt — 마감직전 강신호만
+    else:                   effective_buy_min = buy_min + 2      # 7pt
 
 
 
@@ -989,15 +979,17 @@ def main():
                           and c not in holdings
                           and c not in exit_targets_store     # 오늘 이미 매수 접수한 종목 중복 매수 방지
                           and len(d["sell_conds"]) == 0
-                          and d["chg"] >= (0.3 if (k_chg >= 1.5 and d.get("buy_score",0) < 4) else -0.5)
+                          # chg >= 0.5 위 게이트에서 처리
                           and (k_chg < 2.0 or d["chg"] >= min(k_chg, 5.0) * 0.25)  # 강반등날 역행 차단(k_chg 5%캡, 25%)
                           and d["chg"] <= (5.0 if d.get("buy_score", 0) >= 7 else 3.0)  # 오버익스텐션 방지
                           # ── 고수 규칙 (기대값 분석 기반) ────────────────────────
                           and d["rsi"] >= 35                  # RSI 35 미만 = 아직 하락 중, 바닥 잡기 금지
                           and d["rsi"] < 75                   # RSI 75 이상 = 과매수, 천장 매수 금지
                           and (k_chg >= 0.0 or d.get("buy_score", 0) >= 7)  # 지수 하락 중엔 강신호만
-                          and (d["vol"] >= 1.0 or d["bid_r"] >= 2.0)        # 수급 확인 필수: 평균거래량 이상(1.0x) or 강매수세
-                          and has_momentum_signal(d["buy_conds"])            # 모멘텀 신호 1개 이상 필수
+                          and d["vol"] >= 1.5                              # 거래량 1.5x 미만 = 기관 미참여, 진입 금지
+                          and d["chg"] >= 0.5                               # 종목 자체 0.5%↑ 필수 (하락 중 역매수 금지)
+                          and (k_chg >= 0.3 or d["chg"] - k_chg >= 3.0)   # 시장 상승 OR 강한 역행강세
+                          and has_momentum_signal(d["buy_conds"])            # 거래량1.5x+ / 볼륨스파이크 / VCP★ / 강세 필수
                           # 애널리스트 진입 원칙: 주가가 MA20 위 = 추세 상승 중인 종목만 매수
                           # (MA20 아래는 하락추세로 간주 — 반등을 기대하는 바닥 잡기 금지)
                           and (analysis[c].get("ma_sig") == "골"              # MA5>MA20 = 단기 골든크로스
