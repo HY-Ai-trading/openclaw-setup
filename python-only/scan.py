@@ -921,12 +921,12 @@ def main():
     lunch_window     = not no_buy_time and ((h == 11 and m >= 30) or h == 12 or (h == 13 and m < 30))
     late_window      = not no_buy_time and (h == 14 and m >= 30)
 
-    if gold_window:         effective_buy_min = buy_min          # 5pt
-    elif late_morning:      effective_buy_min = buy_min + 1      # 6pt
-    elif afternoon_window:  effective_buy_min = buy_min + 1      # 6pt
-    elif lunch_window:      effective_buy_min = buy_min + 3      # 8pt — 점심엔 강신호만
-    elif late_window:       effective_buy_min = buy_min + 3      # 8pt — 마감직전 강신호만
-    else:                   effective_buy_min = buy_min + 2      # 7pt
+    if gold_window:         effective_buy_min = buy_min          # 5pt  (9:20-10:30 최적)
+    elif late_morning:      effective_buy_min = buy_min + 1      # 6pt  (10:30-11:30)
+    elif afternoon_window:  effective_buy_min = buy_min + 2      # 7pt  (13:30-14:00)
+    elif lunch_window:      effective_buy_min = buy_min + 10     # 15pt — 사실상 차단
+    elif late_window:       effective_buy_min = buy_min + 10     # 15pt — 사실상 차단
+    else:                   effective_buy_min = buy_min + 10     # 15pt — 사실상 차단
 
 
 
