@@ -737,8 +737,8 @@ def main():
     actions = []
 
     # 하락장 감지 (SELL 판단에도 사용 — bear_market 중엔 손절선 강화) — 공격적 모드: 기준 완화
-    # k_dead+RSI<45: 7/17~7/29 전 거래 손절 구간. k_chg>=5% 폭등일만 예외
-    bear_market = (k_chg <= -1.5 or (k_dead and k_rsi < 45 and k_chg < 5.0))
+    # k_dead+RSI<45: 7/17~7/29 전 거래 손절 구간. k_chg>=4% 강세일 예외 (5%→4% 하향: KOSPI+4%급반등날 포함)
+    bear_market = (k_chg <= -1.5 or (k_dead and k_rsi < 45 and k_chg < 4.0))
     bear_reason = (f"KODEX200 {k_chg:+.1f}% 급락" if k_chg <= -1.5
                    else f"KODEX200 MA데드+RSI{k_rsi:.0f} 하락추세")
 
@@ -968,7 +968,7 @@ def main():
                           and c not in exit_targets_store     # 오늘 이미 매수 접수한 종목 중복 매수 방지
                           and len(d["sell_conds"]) == 0
                           # chg >= 0.5 위 게이트에서 처리
-                          and (k_chg < 2.0 or d["chg"] >= min(k_chg, 5.0) * 0.25)  # 강반등날 역행 차단(k_chg 5%캡, 25%)
+                          and (k_chg < 2.0 or d["chg"] >= min(k_chg, 4.0) * 0.25)  # 강반등날 역행 차단(k_chg 4%캡, 25%)
                           and d["chg"] <= (5.0 if d.get("buy_score", 0) >= 7 else 3.0)  # 오버익스텐션 방지
                           # ── 고수 규칙 (기대값 분석 기반) ────────────────────────
                           and d["rsi"] >= 35                  # RSI 35 미만 = 아직 하락 중, 바닥 잡기 금지
