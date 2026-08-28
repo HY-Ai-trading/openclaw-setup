@@ -891,25 +891,28 @@ def main():
     sold_codes     = {code for act, code, *_ in actions if act == "SELL"}
     # ── 매수 필터 (시간대 / 지수 방향 / 진입 제한) ──────────────
     # ── 매수 시간대 (시장 미시구조 기반) ─────────────────────────
-    # 9:20~10:30 황금타임: 거래량 최고, 모멘텀 명확          → 3pt
-    # 10:30~11:30 오전후반: 모멘텀 지속, 약간 엄격           → 4pt
-    # 11:30~13:30 점심: 거래량 급감·허수 많음 → 완전금지 대신 강신호만(6pt)
-    # 13:30~14:30 오후재개                                   → 4pt
-    # 14:30~15:00 마감 직전 → 완전금지 대신 강신호만(6pt)
+    # 9:10~9:20 얼리오픈: 시가 직후 고점수 신호만 — Opening Auction Momentum → 8pt
+    # 9:20~10:30 황금타임: 거래량 최고, 모멘텀 명확          → 5pt
+    # 10:30~11:30 오전후반: 모멘텀 지속, 약간 엄격           → 6pt
+    # 11:30~13:30 점심: 거래량 급감·허수 많음                → 15pt (사실상 차단)
+    # 13:30~14:30 오후재개                                   → 7pt
+    # 14:30~15:00 마감 직전                                  → 15pt (사실상 차단)
     # 15:00~      장 마감                                     → 매수 금지
     h, m = now.hour, now.minute
     no_buy_time = (
         (h < 9) or
-        (h == 9 and m < 20) or    # 9:20 이전만 금지 (시초가 안정 후 바로 진입)
+        (h == 9 and m < 10) or    # 9:10 이전만 금지 (9:10~9:20 얼리오픈 추가)
         (h >= 15)
     )
-    gold_window      = not no_buy_time and (h == 9 or (h == 10 and m < 30))
+    early_open       = not no_buy_time and (h == 9 and m < 20)   # 9:10~9:20 고점수 전용
+    gold_window      = not no_buy_time and not early_open and (h == 9 or (h == 10 and m < 30))
     late_morning     = not no_buy_time and ((h == 10 and m >= 30) or (h == 11 and m < 30))
     afternoon_window = not no_buy_time and ((h == 13 and m >= 30) or (h == 14 and m < 30))
     lunch_window     = not no_buy_time and ((h == 11 and m >= 30) or h == 12 or (h == 13 and m < 30))
     late_window      = not no_buy_time and (h == 14 and m >= 30)
 
-    if gold_window:         effective_buy_min = buy_min          # 5pt  (9:20-10:30 최적)
+    if early_open:          effective_buy_min = buy_min + 3      # 8pt  (9:10-9:20 얼리오픈)
+    elif gold_window:       effective_buy_min = buy_min          # 5pt  (9:20-10:30 최적)
     elif late_morning:      effective_buy_min = buy_min + 1      # 6pt  (10:30-11:30)
     elif afternoon_window:  effective_buy_min = buy_min + 2      # 7pt  (13:30-14:00)
     elif lunch_window:      effective_buy_min = buy_min + 10     # 15pt — 사실상 차단
@@ -929,7 +932,7 @@ def main():
     block_reason = None
     if no_buy_time:
         if h < 9:                  reason_nb = "장 미개장 (9:00 전)"
-        elif h == 9 and m < 20:    reason_nb = "시초가 혼조 (9:20 전)"
+        elif h == 9 and m < 10:    reason_nb = "시초가 혼조 (9:10 전)"
         else:                      reason_nb = "장 마감 (15:00 이후)"
         print(f"⏰ {reason_nb} — 신규 매수 중단")
         block_reason = reason_nb
