@@ -463,15 +463,16 @@ def calc_ma(closes, period):
     return sum(closes[-period:]) / period
 
 def has_momentum_signal(buy_conds: list) -> bool:
-    """단타 진입 기준: 거래량1.5x+ OR 볼륨스파이크 OR VCP★ OR 강세2%+ 중 1개 필수.
-    RSI·MA·체결강도·호가만으로는 진입 금지 — 실제 수급 확인 필수."""
+    """단타 진입 기준: 거래량1.5x+ OR 볼륨스파이크 OR VCP★ OR 강세2%+ OR MA골든 중 1개 필수.
+    MA골든(5분봉 MA5>MA20) = 추세 방향 확인된 진입으로 인정."""
     # 거래량 신호: "거래량1.5x" "거래량2.3x★" "거래량3.0x★★" 형태
     vol_confirmed = any("거래량" in c and ("x★" in c or
                         any(float(c.split("x")[0].replace("거래량","")) >= 1.5
                             for _ in [0] if c.replace("거래량","").split("x")[0].replace(".","").isdigit()))
                         for c in buy_conds)
     strong_kw = ("볼륨스파이크★", "VCP★", "역행", "강세")
-    return vol_confirmed or any(any(kw in c for kw in strong_kw) for c in buy_conds)
+    ma_confirmed = "MA골든" in buy_conds
+    return vol_confirmed or ma_confirmed or any(any(kw in c for kw in strong_kw) for c in buy_conds)
 
 
 def stock_name(code, quote=None, ind=None, holding=None):
@@ -977,7 +978,7 @@ def main():
                           and d["rsi"] >= 35                  # RSI 35 미만 = 아직 하락 중, 바닥 잡기 금지
                           and d["rsi"] < 75                   # RSI 75 이상 = 과매수, 천장 매수 금지
                           and (k_chg >= 0.0 or d.get("buy_score", 0) >= 7)  # 지수 하락 중엔 강신호만
-                          and d["vol"] >= 1.5                              # 거래량 1.5x 미만 = 기관 미참여, 진입 금지
+                          and d["vol"] >= 1.0                              # 거래량 1.0x 이상 (1.5x→1.0x: MA골든 진입 허용)
                           and d["chg"] >= 0.5                               # 종목 자체 0.5%↑ 필수 (하락 중 역매수 금지)
                           and (k_chg >= 0.3 or d["chg"] - k_chg >= 3.0)   # 시장 상승 OR 강한 역행강세
                           and has_momentum_signal(d["buy_conds"])            # 거래량1.5x+ / 볼륨스파이크 / VCP★ / 강세 필수
