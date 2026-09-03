@@ -979,7 +979,7 @@ def main():
                           and d["rsi"] < 75                   # RSI 75 이상 = 과매수, 천장 매수 금지
                           and (k_chg >= 0.0 or d.get("buy_score", 0) >= 7)  # 지수 하락 중엔 강신호만
                           and d["vol"] >= 1.0                              # 거래량 1.0x 이상 (1.5x→1.0x: MA골든 진입 허용)
-                          and d["chg"] >= 0.5                               # 종목 자체 0.5%↑ 필수 (하락 중 역매수 금지)
+                          and d["chg"] >= 0.3                               # 종목 자체 0.3%↑ 필수 (0.5%→0.3%: MA골든 진입 허용)
                           and (k_chg >= 0.3 or d["chg"] - k_chg >= 3.0)   # 시장 상승 OR 강한 역행강세
                           and has_momentum_signal(d["buy_conds"])            # 거래량1.5x+ / 볼륨스파이크 / VCP★ / 강세 필수
                           # 애널리스트 진입 원칙: 주가가 MA20 위 = 추세 상승 중인 종목만 매수
@@ -1002,7 +1002,7 @@ def main():
         reasons = []
         if c in sold_codes or c in sold_today_codes: reasons.append("당일매도(재매수금지)")
         if c in exit_targets_store:                  reasons.append("오늘매수완료(중복방지)")
-        if d["chg"] < (0.3 if (k_chg >= 1.5 and sc < 4) else -0.5): reasons.append(f"chg{d['chg']:+.1f}%<기준")
+        if d["chg"] < (0.3 if (k_chg >= 1.5 and sc < 4) else 0.3):  reasons.append(f"chg{d['chg']:+.1f}%<기준")
         if d["chg"] > (5.0 if sc >= 7 else 3.0):    reasons.append(f"오버익스텐션chg{d['chg']:+.1f}%")
         if d["rsi"] <= 0:                            reasons.append("RSI=0(데이터없음)")
         if d["rsi"] < 35:                            reasons.append(f"RSI하락중{d['rsi']:.0f}(바닥잡기금지)")
